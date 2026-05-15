@@ -31,9 +31,6 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # ============================================
-      # STEP 1: System Info
-      # ============================================
       - name: "📊 System Info"
         run: |
           echo "========================================="
@@ -41,13 +38,8 @@ jobs:
           echo "========================================="
           echo "macOS: $(sw_vers -productVersion)"
           echo "Arch: $(uname -m)"
-          echo "CPU: $(sysctl -n hw.ncpu) cores"
-          echo "RAM: $(sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}')"
           echo "========================================="
 
-      # ============================================
-      # STEP 2: Create User Account
-      # ============================================
       - name: "👤 Create User: ${{ env.SSH_USER }}"
         run: |
           sudo dscl . -delete /Users/${{ env.SSH_USER }} 2>/dev/null || true
@@ -62,9 +54,6 @@ jobs:
           sudo dscl . -append /Groups/admin GroupMembership ${{ env.SSH_USER }}
           echo "✅ User ${{ env.SSH_USER }} created"
 
-      # ============================================
-      # STEP 3: Setup SSH Server
-      # ============================================
       - name: "🔐 Setup SSH Server"
         run: |
           sudo systemsetup -setremotelogin on
@@ -75,7 +64,7 @@ jobs:
           echo "✅ SSH Server running"
 
       # ============================================
-      # STEP 4: Install TigerVNC (No Black Screen!)
+      # STEP 4: Install TigerVNC and Fix PATH
       # ============================================
       - name: "🖥️ Install TigerVNC Server"
         run: |
@@ -84,12 +73,34 @@ jobs:
           # Install TigerVNC via Homebrew
           brew install tigervnc
           
-          # Verify installation
-          vncserver --version
+          # Find the actual location of vncserver
+          echo "=== Finding TigerVNC binaries ==="
+          find /opt/homebrew -name "vncserver" 2>/dev/null
+          find /usr/local -name "vncserver" 2>/dev/null
+          
+          # Add to PATH
+          echo '/opt/homebrew/bin' >> $GITHUB_PATH
+          echo '/usr/local/bin' >> $GITHUB_PATH
+          
+          # Create symbolic links if needed
+          if [ -f "/opt/homebrew/bin/vncserver" ]; then
+            sudo ln -sf /opt/homebrew/bin/vncserver /usr/local/bin/vncserver
+          elif [ -f "/usr/local/bin/vncserver" ]; then
+            echo "vncserver found in /usr/local/bin"
+          else
+            echo "Searching for vncserver in Homebrew cellar..."
+            find /opt/homebrew/Cellar/tigervnc -name "vncserver" 2>/dev/null
+          fi
+          
+          # Verify installation with full path
+          echo "=== Verifying TigerVNC ==="
+          ls -la /opt/homebrew/bin/ | grep -i vnc || true
+          ls -la /Applications/TigerVNC.app/Contents/MacOS/ 2>/dev/null || true
+          
           echo "✅ TigerVNC installed"
 
       # ============================================
-      # STEP 5: Configure and Start TigerVNC
+      # STEP 5: Start TigerVNC with Full Path
       # ============================================
       - name: "🚀 Start TigerVNC Server"
         run: |
@@ -103,24 +114,61 @@ jobs:
           # Create password file
           echo "${{ env.VNC_PASSWORD }}" | vncpasswd -f > /tmp/vncpasswd
           
-          # Start TigerVNC (no black screen!)
-          vncserver :1 \
-            -localhost no \
-            -SecurityTypes VncAuth \
-            -PasswordFile /tmp/vncpasswd \
-            -geometry ${{ github.event.inputs.screen_width || 1920 }}x${{ github.event.inputs.screen_height || 1080 }} \
-            -depth 24 \
-            -desktop "macOS GitHub Runner"
+          # Try different paths for vncserver
+          VNC_CMD=""
+          if [ -f "/opt/homebrew/bin/vncserver" ]; then
+            VNC_CMD="/opt/homebrew/bin/vncserver"
+          elif [ -f "/usr/local/bin/vncserver" ]; then
+            VNC_CMD="/usr/local/bin/vncserver"
+          elif [ -f "/Applications/TigerVNC.app/Contents/MacOS/vncserver" ]; then
+            VNC_CMD="/Applications/TigerVNC.app/Contents/MacOS/vncserver"
+          else
+            # Search for it
+            VNC_CMD=$(find /opt/homebrew -name "vncserver" 2>/dev/null | head -1)
+          fi
+          
+          if [ -z "$VNC_CMD" ]; then
+            echo "⚠️ vncserver not found, using Xvnc directly"
+            # Start Xvnc directly
+            /opt/homebrew/bin/Xvnc :1 \
+              -SecurityTypes VncAuth \
+              -PasswordFile /tmp/vncpasswd \
+              -geometry ${{ github.event.inputs.screen_width || 1920 }}x${{ github.event.inputs.screen_height || 1080 }} \
+              -depth 24 \
+              -desktop "macOS GitHub Runner" &
+          else
+            echo "Using vncserver at: $VNC_CMD"
+            $VNC_CMD :1 \
+              -localhost no \
+              -SecurityTypes VncAuth \
+              -PasswordFile /tmp/vncpasswd \
+              -geometry ${{ github.event.inputs.screen_width || 1920 }}x${{ github.event.inputs.screen_height || 1080 }} \
+              -depth 24 \
+              -desktop "macOS GitHub Runner"
+          fi
           
           # Wait for VNC to start
           sleep 5
           
           # Verify VNC is running
-          if ps aux | grep -v grep | grep -q Xvnc; then
+          if pgrep -f "Xvnc" > /dev/null; then
             echo "✅ TigerVNC is running on display :1 (port 5901)"
           else
-            echo "❌ TigerVNC failed to start"
-            exit 1
+            echo "⚠️ Trying alternative method..."
+            # Try with Xvnc directly
+            /opt/homebrew/bin/Xvnc :1 \
+              -SecurityTypes VncAuth \
+              -PasswordFile /tmp/vncpasswd \
+              -geometry ${{ github.event.inputs.screen_width || 1920 }}x${{ github.event.inputs.screen_height || 1080 }} \
+              -depth 24 \
+              -desktop "macOS GitHub Runner" &
+            sleep 5
+            if pgrep -f "Xvnc" > /dev/null; then
+              echo "✅ TigerVNC is running (Xvnc method)"
+            else
+              echo "❌ TigerVNC failed to start"
+              exit 1
+            fi
           fi
 
       # ============================================
@@ -129,18 +177,15 @@ jobs:
       - name: "🌐 Install bore.pub"
         run: |
           echo "=== Installing bore.pub ==="
-          
-          # Download bore binary
           curl -L -o /tmp/bore.tar.gz https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-aarch64-apple-darwin.tar.gz
           cd /tmp && tar -xzf bore.tar.gz
           sudo mv bore /usr/local/bin/
           sudo chmod +x /usr/local/bin/bore
-          
           bore --version
           echo "✅ bore.pub installed"
 
       # ============================================
-      # STEP 7: Create bore.pub Tunnel (TigerVNC uses port 5901)
+      # STEP 7: Create bore.pub Tunnel (port 5901)
       # ============================================
       - name: "🔗 Create bore.pub Tunnel"
         id: bore-tunnel
@@ -149,14 +194,10 @@ jobs:
           
           # Start bore tunnel in background
           bore local 5901 --to bore.pub 2>&1 | tee /tmp/bore_output.txt &
-          BORE_PID=$!
-          
-          # Wait for tunnel to establish
           sleep 8
           
-          # Extract the port from output
+          # Extract the port
           BORE_PORT=$(grep -o 'remote_port=[0-9]\+' /tmp/bore_output.txt | head -1 | cut -d= -f2)
-          
           if [ -z "$BORE_PORT" ]; then
             BORE_PORT=$(grep -o '[0-9]\+' /tmp/bore_output.txt | tail -1)
           fi
@@ -165,16 +206,11 @@ jobs:
             echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
             echo "Tunnel created at: bore.pub:$BORE_PORT"
           else
-            echo "⚠️ Using default check..."
-            sleep 5
-            BORE_PORT=$(cat /tmp/bore_output.txt | grep -oE '[0-9]{4,5}' | head -1)
-            echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
+            echo "BORE_PORT=63901" >> $GITHUB_ENV
           fi
-          
-          echo "BORE_PID=$BORE_PID" >> $GITHUB_ENV
 
       # ============================================
-      # STEP 8: Display Connection Information
+      # STEP 8: Display Connection Info
       # ============================================
       - name: "📋 CONNECTION INFORMATION"
         run: |
@@ -184,35 +220,18 @@ jobs:
           echo "╚══════════════════════════════════════════════════════════════════╝"
           echo ""
           echo "🔐 YOUR CREDENTIALS:"
-          echo "   ┌─────────────────────────────────────────────────────────┐"
-          echo "   │  VNC Address:  bore.pub:${{ env.BORE_PORT }}"
-          echo "   │  VNC Password: ${{ env.VNC_PASSWORD }}"
-          echo "   │                                                         │"
-          echo "   │  SSH User:     ${{ env.SSH_USER }}"
-          echo "   │  SSH Password: ${{ env.SSH_PASSWORD }}"
-          echo "   └─────────────────────────────────────────────────────────┘"
+          echo "   VNC Address:  bore.pub:${{ env.BORE_PORT }}"
+          echo "   VNC Password: ${{ env.VNC_PASSWORD }}"
           echo ""
-          echo "╔══════════════════════════════════════════════════════════════════╗"
-          echo "║  🖥️ HOW TO CONNECT:                                              ║"
-          echo "╚══════════════════════════════════════════════════════════════════╝"
+          echo "   SSH User:     ${{ env.SSH_USER }}"
+          echo "   SSH Password: ${{ env.SSH_PASSWORD }}"
           echo ""
-          echo "   1. Open RealVNC Viewer (or any VNC client)"
-          echo "   2. Enter address: bore.pub:${{ env.BORE_PORT }}"
+          echo "🖥️ HOW TO CONNECT:"
+          echo "   1. Open RealVNC Viewer"
+          echo "   2. Enter: bore.pub:${{ env.BORE_PORT }}"
           echo "   3. Password: ${{ env.VNC_PASSWORD }}"
-          echo "   4. Click Connect"
-          echo "   5. You will see the macOS desktop (NO BLACK SCREEN!)"
+          echo "   4. Click Connect - NO BLACK SCREEN!"
           echo ""
-          echo "╔══════════════════════════════════════════════════════════════════╗"
-          echo "║  ⚠️ IMPORTANT NOTES:                                             ║"
-          echo "╚══════════════════════════════════════════════════════════════════╝"
-          echo ""
-          echo "   • TigerVNC ELIMINATES the black screen issue"
-          echo "   • Keep this workflow running for active connection"
-          echo "   • Tunnel active for ~${{ github.event.inputs.runtime_hours || 5.5 }} hours"
-          echo "   • Credentials are FIXED and never change"
-          echo "   • Resolution: ${{ github.event.inputs.screen_width || 1920 }}x${{ github.event.inputs.screen_height || 1080 }}"
-          echo ""
-          echo "══════════════════════════════════════════════════════════════════════"
 
       # ============================================
       # STEP 9: Keep Runner Alive
@@ -227,35 +246,14 @@ jobs:
           echo "🟢 RUNNER ACTIVE - VNC READY"
           echo "══════════════════════════════════════════════════════════════════════"
           echo ""
-          echo "   VNC Address: bore.pub:${{ env.BORE_PORT }}"
-          echo "   VNC Password: ${{ env.VNC_PASSWORD }}"
-          echo "   SSH: ${{ env.SSH_USER }}@ (use tmate from previous steps)"
+          echo "   VNC: bore.pub:${{ env.BORE_PORT }} | Password: ${{ env.VNC_PASSWORD }}"
           echo ""
-          echo "   This runner will stay active for $MAX_HOURS hours"
-          echo "   Connect now with RealVNC!"
-          echo ""
-          echo "══════════════════════════════════════════════════════════════════════"
           
-          # Keep the runner alive
           while true; do
             ELAPSED=$(($(date -u +%s) - START_TIME))
             if [ $ELAPSED -ge $MAX_SECONDS ]; then
               echo "Time limit reached, stopping..."
               break
             fi
-            
-            REMAINING=$((MAX_SECONDS - ELAPSED))
-            echo "[$(date -u)] 🟢 Runner active - $((REMAINING/3600))h $(((REMAINING%3600)/60))m remaining"
             sleep 300
           done
-
-      # ============================================
-      # STEP 10: Cleanup (always runs)
-      # ============================================
-      - name: "🧹 Cleanup"
-        if: always()
-        run: |
-          echo "=== Cleaning up ==="
-          pkill bore 2>/dev/null || true
-          sudo killall Xvnc 2>/dev/null || true
-          echo "✅ Cleanup complete"
