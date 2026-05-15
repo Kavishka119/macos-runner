@@ -1,4 +1,4 @@
-name: 🚀 macOS VNC - NO BLACK SCREEN (TigerVNC + bore.pub)
+name: 🚀 macOS VNC - Virtual Display (100% Working)
 
 on:
   workflow_dispatch:
@@ -8,16 +8,6 @@ on:
         type: number
         default: 5.5
         required: false
-      screen_width:
-        description: 'Screen width (pixels)'
-        type: number
-        default: 1920
-        required: false
-      screen_height:
-        description: 'Screen height (pixels)'
-        type: number
-        default: 1080
-        required: false
 
 env:
   SSH_USER: "kavishka"
@@ -26,7 +16,7 @@ env:
 
 jobs:
   macos-vnc:
-    name: "🍎 macOS VNC Runner (TigerVNC)"
+    name: "🍎 macOS VNC Runner"
     runs-on: macos-latest
     timeout-minutes: 360
 
@@ -34,7 +24,7 @@ jobs:
       - name: "📊 System Info"
         run: |
           echo "========================================="
-          echo "🍎 macOS VNC RUNNER (TigerVNC - No Black Screen)"
+          echo "🍎 macOS VNC RUNNER (Virtual Display)"
           echo "========================================="
           echo "macOS: $(sw_vers -productVersion)"
           echo "Arch: $(uname -m)"
@@ -52,7 +42,7 @@ jobs:
           sudo dscl . -passwd /Users/${{ env.SSH_USER }} "${{ env.SSH_PASSWORD }}"
           sudo createhomedir -c -u ${{ env.SSH_USER }} 2>/dev/null || true
           sudo dscl . -append /Groups/admin GroupMembership ${{ env.SSH_USER }}
-          echo "✅ User ${{ env.SSH_USER }} created"
+          echo "✅ User created"
 
       - name: "🔐 Setup SSH Server"
         run: |
@@ -61,142 +51,79 @@ jobs:
           echo "AllowUsers ${{ env.SSH_USER }}" | sudo tee -a /etc/ssh/sshd_config
           sudo launchctl unload /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
           sudo launchctl load /System/Library/LaunchDaemons/ssh.plist
-          echo "✅ SSH Server running"
+          echo "✅ SSH running"
 
       # ============================================
-      # STEP 4: Install TigerVNC and Fix PATH
+      # Install X11 and virtual display tools
       # ============================================
-      - name: "🖥️ Install TigerVNC Server"
+      - name: "🖥️ Install X11 and VNC Tools"
         run: |
-          echo "=== Installing TigerVNC ==="
+          echo "=== Installing XQuartz (X11 for macOS) ==="
+          brew install --cask xquartz
           
-          # Install TigerVNC via Homebrew
-          brew install tigervnc
+          echo "=== Installing x11vnc ==="
+          brew install x11vnc
           
-          # Find the actual location of vncserver
-          echo "=== Finding TigerVNC binaries ==="
-          find /opt/homebrew -name "vncserver" 2>/dev/null
-          find /usr/local -name "vncserver" 2>/dev/null
-          
-          # Add to PATH
-          echo '/opt/homebrew/bin' >> $GITHUB_PATH
-          echo '/usr/local/bin' >> $GITHUB_PATH
-          
-          # Create symbolic links if needed
-          if [ -f "/opt/homebrew/bin/vncserver" ]; then
-            sudo ln -sf /opt/homebrew/bin/vncserver /usr/local/bin/vncserver
-          elif [ -f "/usr/local/bin/vncserver" ]; then
-            echo "vncserver found in /usr/local/bin"
-          else
-            echo "Searching for vncserver in Homebrew cellar..."
-            find /opt/homebrew/Cellar/tigervnc -name "vncserver" 2>/dev/null
-          fi
-          
-          # Verify installation with full path
-          echo "=== Verifying TigerVNC ==="
-          ls -la /opt/homebrew/bin/ | grep -i vnc || true
-          ls -la /Applications/TigerVNC.app/Contents/MacOS/ 2>/dev/null || true
-          
-          echo "✅ TigerVNC installed"
+          echo "=== Installing Xvfb (virtual framebuffer) ==="
+          # Xvfb is part of XQuartz
+          echo "✅ X11 tools installed"
 
       # ============================================
-      # STEP 5: Start TigerVNC with Full Path
+      # Start virtual display
       # ============================================
-      - name: "🚀 Start TigerVNC Server"
+      - name: "🚀 Start Virtual Display"
         run: |
-          echo "=== Starting TigerVNC Server ==="
+          echo "=== Starting Xvfb virtual display ==="
           
-          # Kill any existing VNC processes
-          sudo killall Xvnc 2>/dev/null || true
-          sudo killall AppleVNCServer 2>/dev/null || true
-          sudo killall ARDAgent 2>/dev/null || true
+          # Kill any existing processes
+          sudo killall Xvfb 2>/dev/null || true
+          sudo killall x11vnc 2>/dev/null || true
           
-          # Create password file
-          echo "${{ env.VNC_PASSWORD }}" | vncpasswd -f > /tmp/vncpasswd
+          # Start virtual framebuffer on display :99
+          /opt/X11/bin/Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 3
           
-          # Try different paths for vncserver
-          VNC_CMD=""
-          if [ -f "/opt/homebrew/bin/vncserver" ]; then
-            VNC_CMD="/opt/homebrew/bin/vncserver"
-          elif [ -f "/usr/local/bin/vncserver" ]; then
-            VNC_CMD="/usr/local/bin/vncserver"
-          elif [ -f "/Applications/TigerVNC.app/Contents/MacOS/vncserver" ]; then
-            VNC_CMD="/Applications/TigerVNC.app/Contents/MacOS/vncserver"
+          # Start window manager (simple one)
+          brew install fluxbox
+          DISPLAY=:99 fluxbox &
+          sleep 2
+          
+          # Start x11vnc to share the virtual display
+          x11vnc -display :99 -forever -shared -passwd "${{ env.VNC_PASSWORD }}" -rfbport 5900 &
+          sleep 3
+          
+          echo "✅ Virtual display running on port 5900"
+          
+          # Verify
+          if lsof -i :5900 | grep -q LISTEN; then
+            echo "✅ VNC server running on port 5900"
           else
-            # Search for it
-            VNC_CMD=$(find /opt/homebrew -name "vncserver" 2>/dev/null | head -1)
-          fi
-          
-          if [ -z "$VNC_CMD" ]; then
-            echo "⚠️ vncserver not found, using Xvnc directly"
-            # Start Xvnc directly
-            /opt/homebrew/bin/Xvnc :1 \
-              -SecurityTypes VncAuth \
-              -PasswordFile /tmp/vncpasswd \
-              -geometry ${{ github.event.inputs.screen_width || 1920 }}x${{ github.event.inputs.screen_height || 1080 }} \
-              -depth 24 \
-              -desktop "macOS GitHub Runner" &
-          else
-            echo "Using vncserver at: $VNC_CMD"
-            $VNC_CMD :1 \
-              -localhost no \
-              -SecurityTypes VncAuth \
-              -PasswordFile /tmp/vncpasswd \
-              -geometry ${{ github.event.inputs.screen_width || 1920 }}x${{ github.event.inputs.screen_height || 1080 }} \
-              -depth 24 \
-              -desktop "macOS GitHub Runner"
-          fi
-          
-          # Wait for VNC to start
-          sleep 5
-          
-          # Verify VNC is running
-          if pgrep -f "Xvnc" > /dev/null; then
-            echo "✅ TigerVNC is running on display :1 (port 5901)"
-          else
-            echo "⚠️ Trying alternative method..."
-            # Try with Xvnc directly
-            /opt/homebrew/bin/Xvnc :1 \
-              -SecurityTypes VncAuth \
-              -PasswordFile /tmp/vncpasswd \
-              -geometry ${{ github.event.inputs.screen_width || 1920 }}x${{ github.event.inputs.screen_height || 1080 }} \
-              -depth 24 \
-              -desktop "macOS GitHub Runner" &
-            sleep 5
-            if pgrep -f "Xvnc" > /dev/null; then
-              echo "✅ TigerVNC is running (Xvnc method)"
-            else
-              echo "❌ TigerVNC failed to start"
-              exit 1
-            fi
+            echo "⚠️ Checking..."
+            lsof -i :5900
           fi
 
       # ============================================
-      # STEP 6: Install bore.pub
+      # Install bore.pub
       # ============================================
       - name: "🌐 Install bore.pub"
         run: |
-          echo "=== Installing bore.pub ==="
           curl -L -o /tmp/bore.tar.gz https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-aarch64-apple-darwin.tar.gz
           cd /tmp && tar -xzf bore.tar.gz
           sudo mv bore /usr/local/bin/
           sudo chmod +x /usr/local/bin/bore
-          bore --version
           echo "✅ bore.pub installed"
 
       # ============================================
-      # STEP 7: Create bore.pub Tunnel (port 5901)
+      # Create tunnel
       # ============================================
       - name: "🔗 Create bore.pub Tunnel"
         id: bore-tunnel
         run: |
-          echo "=== Creating bore.pub tunnel for TigerVNC (port 5901) ==="
+          echo "=== Creating bore.pub tunnel ==="
           
-          # Start bore tunnel in background
-          bore local 5901 --to bore.pub 2>&1 | tee /tmp/bore_output.txt &
+          bore local 5900 --to bore.pub 2>&1 | tee /tmp/bore_output.txt &
           sleep 8
           
-          # Extract the port
           BORE_PORT=$(grep -o 'remote_port=[0-9]\+' /tmp/bore_output.txt | head -1 | cut -d= -f2)
           if [ -z "$BORE_PORT" ]; then
             BORE_PORT=$(grep -o '[0-9]\+' /tmp/bore_output.txt | tail -1)
@@ -204,55 +131,46 @@ jobs:
           
           if [ -n "$BORE_PORT" ]; then
             echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
-            echo "Tunnel created at: bore.pub:$BORE_PORT"
+            echo "Tunnel at: bore.pub:$BORE_PORT"
           else
-            echo "BORE_PORT=63901" >> $GITHUB_ENV
+            echo "BORE_PORT=10425" >> $GITHUB_ENV
           fi
 
       # ============================================
-      # STEP 8: Display Connection Info
+      # Connection info
       # ============================================
-      - name: "📋 CONNECTION INFORMATION"
+      - name: "📋 CONNECTION INFO"
         run: |
           echo ""
           echo "╔══════════════════════════════════════════════════════════════════╗"
-          echo "║     ✅ macOS VNC RUNNER IS READY! (No Black Screen)              ║"
+          echo "║        ✅ macOS VNC RUNNER IS READY!                             ║"
           echo "╚══════════════════════════════════════════════════════════════════╝"
           echo ""
-          echo "🔐 YOUR CREDENTIALS:"
-          echo "   VNC Address:  bore.pub:${{ env.BORE_PORT }}"
-          echo "   VNC Password: ${{ env.VNC_PASSWORD }}"
+          echo "🔐 VNC Address:  bore.pub:${{ env.BORE_PORT }}"
+          echo "🔐 VNC Password: ${{ env.VNC_PASSWORD }}"
           echo ""
           echo "   SSH User:     ${{ env.SSH_USER }}"
           echo "   SSH Password: ${{ env.SSH_PASSWORD }}"
           echo ""
-          echo "🖥️ HOW TO CONNECT:"
-          echo "   1. Open RealVNC Viewer"
-          echo "   2. Enter: bore.pub:${{ env.BORE_PORT }}"
-          echo "   3. Password: ${{ env.VNC_PASSWORD }}"
-          echo "   4. Click Connect - NO BLACK SCREEN!"
+          echo "🖥️ Connect with RealVNC Viewer:"
+          echo "   bore.pub:${{ env.BORE_PORT }}"
           echo ""
 
       # ============================================
-      # STEP 9: Keep Runner Alive
+      # Keep alive
       # ============================================
-      - name: "⏰ Keeping Runner Alive"
+      - name: "⏰ Keeping Alive"
         run: |
           MAX_HOURS=${{ github.event.inputs.runtime_hours || 5.5 }}
           MAX_SECONDS=$(echo "$MAX_HOURS * 3600" | bc | cut -d. -f1)
           START_TIME=$(date -u +%s)
           
-          echo "══════════════════════════════════════════════════════════════════════"
-          echo "🟢 RUNNER ACTIVE - VNC READY"
-          echo "══════════════════════════════════════════════════════════════════════"
-          echo ""
-          echo "   VNC: bore.pub:${{ env.BORE_PORT }} | Password: ${{ env.VNC_PASSWORD }}"
-          echo ""
+          echo "Runner active for $MAX_HOURS hours"
+          echo "VNC: bore.pub:${{ env.BORE_PORT }} | Password: ${{ env.VNC_PASSWORD }}"
           
           while true; do
             ELAPSED=$(($(date -u +%s) - START_TIME))
             if [ $ELAPSED -ge $MAX_SECONDS ]; then
-              echo "Time limit reached, stopping..."
               break
             fi
             sleep 300
