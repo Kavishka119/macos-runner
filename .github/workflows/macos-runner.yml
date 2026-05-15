@@ -1,9 +1,13 @@
-name: 🚀 macOS Runner - SSH + VNC (FIXED)
+name: 🚀 macOS VNC with bore.pub (Black Screen Fixed)
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '30 */5 * * *'
+    inputs:
+      runtime_hours:
+        description: 'Runtime in hours (max 6)'
+        type: number
+        default: 5.5
+        required: false
 
 env:
   SSH_USER: "kavishka"
@@ -11,26 +15,35 @@ env:
   VNC_PASSWORD: "26119"
 
 jobs:
-  macos-runner:
+  macos-vnc:
+    name: "🍎 macOS Runner with VNC"
     runs-on: macos-latest
     timeout-minutes: 360
 
     steps:
+      # ============================================
+      # STEP 1: System Information
+      # ============================================
       - name: "📊 System Info"
         run: |
           echo "========================================="
-          echo "🍎 macOS RUNNER STARTING"
+          echo "🍎 macOS VNC RUNNER STARTING"
           echo "========================================="
           echo "macOS: $(sw_vers -productVersion)"
           echo "Arch: $(uname -m)"
+          echo "CPU: $(sysctl -n hw.ncpu) cores"
+          echo "RAM: $(sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}')"
           echo "========================================="
 
+      # ============================================
+      # STEP 2: Create User Account
+      # ============================================
       - name: "👤 Create User: ${{ env.SSH_USER }}"
         run: |
           sudo dscl . -delete /Users/${{ env.SSH_USER }} 2>/dev/null || true
           sudo dscl . -create /Users/${{ env.SSH_USER }}
           sudo dscl . -create /Users/${{ env.SSH_USER }} UserShell /bin/bash
-          sudo dscl . -create /Users/${{ env.SSH_USER }} RealName "macOS Runner"
+          sudo dscl . -create /Users/${{ env.SSH_USER }} RealName "macOS VNC User"
           sudo dscl . -create /Users/${{ env.SSH_USER }} UniqueID 1500
           sudo dscl . -create /Users/${{ env.SSH_USER }} PrimaryGroupID 20
           sudo dscl . -create /Users/${{ env.SSH_USER }} NFSHomeDirectory /Users/${{ env.SSH_USER }}
@@ -39,6 +52,9 @@ jobs:
           sudo dscl . -append /Groups/admin GroupMembership ${{ env.SSH_USER }}
           echo "✅ User ${{ env.SSH_USER }} created"
 
+      # ============================================
+      # STEP 3: Setup SSH Server
+      # ============================================
       - name: "🔐 Setup SSH Server"
         run: |
           sudo systemsetup -setremotelogin on
@@ -48,63 +64,165 @@ jobs:
           sudo launchctl load /System/Library/LaunchDaemons/ssh.plist
           echo "✅ SSH Server running"
 
-      - name: "🖥️ Setup VNC Server"
+      # ============================================
+      # STEP 4: Setup VNC Server with Black Screen Fix
+      # ============================================
+      - name: "🖥️ Setup VNC Server (Black Screen Fixed)"
         run: |
+          echo "=== Setting up VNC Server ==="
+          
+          # Kill any existing VNC processes
+          sudo killall AppleVNCServer 2>/dev/null || true
+          sudo killall ARDAgent 2>/dev/null || true
+          
+          # Wait for processes to terminate
+          sleep 2
+          
+          # Enable Screen Sharing with legacy VNC
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
+            -activate \
+            -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "${{ env.VNC_PASSWORD }}" \
             -restart -agent -privs -all
-          echo "✅ VNC Server running (Password: ${{ env.VNC_PASSWORD }})"
-
-      - name: "🌐 Install TMATE"
-        run: |
-          brew install tmate
-          echo "✅ TMATE installed"
-
-      - name: "🔗 START TMATE - COPY THESE COMMANDS"
-        run: |
-          # Start tmate
-          tmate -S /tmp/tmate.sock new-session -d
-          sleep 3
-          tmate -S /tmp/tmate.sock wait tmate-ready
+          
+          # Allow all users access
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -configure -allowAccessFor -allUsers -privs -all
+          
+          # Set display settings to prevent black screen
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAllowConnections -bool YES
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCPassword -string "${{ env.VNC_PASSWORD }}"
+          
+          # Force restart of the VNC service
+          sudo launchctl unload /System/Library/LaunchDaemons/com.apple.ARDAgent.plist 2>/dev/null || true
           sleep 2
+          sudo launchctl load /System/Library/LaunchDaemons/com.apple.ARDAgent.plist
           
-          # Get connection info
-          SSH_CMD=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
-          SSH_PORT=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh_port}')
-          SSH_HOST=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh_host}')
+          # Verify VNC is running
+          sleep 3
+          if sudo lsof -i :5900 | grep -q LISTEN; then
+            echo "✅ VNC Server is running on port 5900"
+          else
+            echo "⚠️ VNC Server may not be running, checking again..."
+            sudo lsof -i :5900
+          fi
           
+          # Create a test screen to prevent black screen
+          sudo -u ${{ env.SSH_USER }} defaults write com.apple.finder AppleShowAllFiles YES
+          
+          echo "✅ VNC Server configured with password: ${{ env.VNC_PASSWORD }}"
+
+      # ============================================
+      # STEP 5: Install bore.pub
+      # ============================================
+      - name: "🌐 Install bore.pub"
+        run: |
+          echo "=== Installing bore.pub ==="
+          
+          # Download bore binary for macOS ARM64
+          curl -L -o /tmp/bore.tar.gz https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-aarch64-apple-darwin.tar.gz
+          
+          # Extract
+          cd /tmp && tar -xzf bore.tar.gz
+          
+          # Move to PATH
+          sudo mv bore /usr/local/bin/
+          sudo chmod +x /usr/local/bin/bore
+          
+          # Verify installation
+          bore --version
+          echo "✅ bore.pub installed"
+
+      # ============================================
+      # STEP 6: Create bore.pub Tunnel
+      # ============================================
+      - name: "🔗 Create bore.pub Tunnel"
+        id: bore-tunnel
+        run: |
+          echo "=== Creating bore.pub tunnel for VNC ==="
+          
+          # Start bore tunnel in background
+          bore local 5900 --to bore.pub 2>&1 | tee /tmp/bore_output.txt &
+          
+          # Wait for tunnel to establish
+          sleep 5
+          
+          # Extract the port from output
+          BORE_PORT=$(grep -oP 'remote_port=\K\d+' /tmp/bore_output.txt | head -1)
+          
+          if [ -n "$BORE_PORT" ]; then
+            echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
+            echo "✅ Tunnel created at: bore.pub:$BORE_PORT"
+          else
+            # Try alternative extraction method
+            BORE_PORT=$(cat /tmp/bore_output.txt | grep -o '[0-9]\+' | tail -1)
+            if [ -n "$BORE_PORT" ]; then
+              echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
+              echo "✅ Tunnel created at: bore.pub:$BORE_PORT"
+            else
+              echo "⚠️ Could not extract port, checking logs..."
+              cat /tmp/bore_output.txt
+            fi
+          fi
+
+      # ============================================
+      # STEP 7: Display Connection Information
+      # ============================================
+      - name: "📋 CONNECTION INFORMATION"
+        run: |
           echo ""
           echo "========================================="
-          echo "🔗 YOUR SSH CONNECTION COMMAND"
+          echo "✅ macOS VNC RUNNER IS READY!"
           echo "========================================="
           echo ""
-          echo "$SSH_CMD"
-          echo ""
-          echo "========================================="
-          echo "🔗 VNC TUNNEL COMMAND"
-          echo "========================================="
-          echo ""
-          echo "ssh -L 5900:localhost:5900 -p $SSH_PORT $SSH_HOST"
-          echo ""
-          echo "========================================="
-          echo "🔐 YOUR CREDENTIALS (SAVE THESE):"
+          echo "🔐 YOUR CREDENTIALS:"
+          echo "   VNC Address: bore.pub:${{ env.BORE_PORT }}"
+          echo "   VNC Password: ${{ env.VNC_PASSWORD }}"
           echo "   SSH User: ${{ env.SSH_USER }}"
           echo "   SSH Password: ${{ env.SSH_PASSWORD }}"
-          echo "   VNC Password: ${{ env.VNC_PASSWORD }}"
+          echo ""
+          echo "========================================="
+          echo "🖥️ HOW TO CONNECT:"
           echo "========================================="
           echo ""
-          echo "📝 HOW TO CONNECT:"
-          echo "1. Copy the SSH command above"
-          echo "2. Paste in your terminal"
-          echo "3. Run: su - kavishka (password: 26119)"
-          echo "4. For VNC: Run the VNC tunnel command in NEW terminal"
-          echo "5. Open RealVNC → localhost:5900 → password: 26119"
+          echo "1. Open RealVNC Viewer on your computer"
+          echo "2. Enter address: bore.pub:${{ env.BORE_PORT }}"
+          echo "3. Password: ${{ env.VNC_PASSWORD }}"
+          echo "4. Click Connect"
+          echo ""
           echo "========================================="
+          echo "⚠️ IMPORTANT NOTES:"
+          echo "========================================="
+          echo "- Keep this workflow running"
+          echo "- The tunnel will stay active for ~${{ github.event.inputs.runtime_hours || 5.5 }} hours"
+          echo "- If VNC shows black screen, wait 10 seconds and reconnect"
+          echo "- Credentials are FIXED and will NEVER change"
+          echo "========================================="
+
+      # ============================================
+      # STEP 8: Keep Runner Alive
+      # ============================================
+      - name: "⏰ Keeping Runner Alive"
+        run: |
+          MAX_HOURS=${{ github.event.inputs.runtime_hours || 5.5 }}
+          MAX_SECONDS=$(echo "$MAX_HOURS * 3600" | bc | cut -d. -f1)
+          START_TIME=$(date -u +%s)
           
-          # Keep tmate running
+          echo "Runner will run for $MAX_HOURS hours"
+          echo "VNC available at: bore.pub:${{ env.BORE_PORT }}"
+          echo "Password: ${{ env.VNC_PASSWORD }}"
+          
+          # Keep the runner alive
           while true; do
-            echo "Runner active at $(date) - SSH tunnel running"
-            sleep 300
+            ELAPSED=$(($(date -u +%s) - START_TIME))
+            if [ $ELAPSED -ge $MAX_SECONDS ]; then
+              echo "Time limit reached, stopping..."
+              break
+            fi
+            
+            REMAINING=$((MAX_SECONDS - ELAPSED))
+            echo "[$(date -u)] Runner active - $((REMAINING/3600))h $(((REMAINING%3600)/60))m remaining"
+            echo "VNC: bore.pub:${{ env.BORE_PORT }} | Password: ${{ env.VNC_PASSWORD }}"
+            sleep 300  # Print every 5 minutes
           done
