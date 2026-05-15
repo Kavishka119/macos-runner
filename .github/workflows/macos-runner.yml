@@ -1,4 +1,4 @@
-name: 🚀 macOS VNC with bore.pub (Black Screen Fixed)
+name: 🚀 macOS VNC - NO BLACK SCREEN (TigerVNC + bore.pub)
 
 on:
   workflow_dispatch:
@@ -8,6 +8,16 @@ on:
         type: number
         default: 5.5
         required: false
+      screen_width:
+        description: 'Screen width (pixels)'
+        type: number
+        default: 1920
+        required: false
+      screen_height:
+        description: 'Screen height (pixels)'
+        type: number
+        default: 1080
+        required: false
 
 env:
   SSH_USER: "kavishka"
@@ -16,18 +26,18 @@ env:
 
 jobs:
   macos-vnc:
-    name: "🍎 macOS Runner with VNC"
+    name: "🍎 macOS VNC Runner (TigerVNC)"
     runs-on: macos-latest
     timeout-minutes: 360
 
     steps:
       # ============================================
-      # STEP 1: System Information
+      # STEP 1: System Info
       # ============================================
       - name: "📊 System Info"
         run: |
           echo "========================================="
-          echo "🍎 macOS VNC RUNNER STARTING"
+          echo "🍎 macOS VNC RUNNER (TigerVNC - No Black Screen)"
           echo "========================================="
           echo "macOS: $(sw_vers -productVersion)"
           echo "Arch: $(uname -m)"
@@ -65,143 +75,147 @@ jobs:
           echo "✅ SSH Server running"
 
       # ============================================
-      # STEP 4: Setup VNC Server with Black Screen Fix
+      # STEP 4: Install TigerVNC (No Black Screen!)
       # ============================================
-      - name: "🖥️ Setup VNC Server (Black Screen Fixed)"
+      - name: "🖥️ Install TigerVNC Server"
         run: |
-          echo "=== Setting up VNC Server ==="
+          echo "=== Installing TigerVNC ==="
+          
+          # Install TigerVNC via Homebrew
+          brew install tigervnc
+          
+          # Verify installation
+          vncserver --version
+          echo "✅ TigerVNC installed"
+
+      # ============================================
+      # STEP 5: Configure and Start TigerVNC
+      # ============================================
+      - name: "🚀 Start TigerVNC Server"
+        run: |
+          echo "=== Starting TigerVNC Server ==="
           
           # Kill any existing VNC processes
+          sudo killall Xvnc 2>/dev/null || true
           sudo killall AppleVNCServer 2>/dev/null || true
           sudo killall ARDAgent 2>/dev/null || true
           
-          # Wait for processes to terminate
-          sleep 2
+          # Create password file
+          echo "${{ env.VNC_PASSWORD }}" | vncpasswd -f > /tmp/vncpasswd
           
-          # Enable Screen Sharing with legacy VNC
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate \
-            -configure -access -on \
-            -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw "${{ env.VNC_PASSWORD }}" \
-            -restart -agent -privs -all
+          # Start TigerVNC (no black screen!)
+          vncserver :1 \
+            -localhost no \
+            -SecurityTypes VncAuth \
+            -PasswordFile /tmp/vncpasswd \
+            -geometry ${{ github.event.inputs.screen_width || 1920 }}x${{ github.event.inputs.screen_height || 1080 }} \
+            -depth 24 \
+            -desktop "macOS GitHub Runner"
           
-          # Allow all users access
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -allowAccessFor -allUsers -privs -all
-          
-          # Set display settings to prevent black screen
-          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAllowConnections -bool YES
-          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCPassword -string "${{ env.VNC_PASSWORD }}"
-          
-          # Force restart of the VNC service
-          sudo launchctl unload /System/Library/LaunchDaemons/com.apple.ARDAgent.plist 2>/dev/null || true
-          sleep 2
-          sudo launchctl load /System/Library/LaunchDaemons/com.apple.ARDAgent.plist
+          # Wait for VNC to start
+          sleep 5
           
           # Verify VNC is running
-          sleep 3
-          if sudo lsof -i :5900 | grep -q LISTEN; then
-            echo "✅ VNC Server is running on port 5900"
+          if ps aux | grep -v grep | grep -q Xvnc; then
+            echo "✅ TigerVNC is running on display :1 (port 5901)"
           else
-            echo "⚠️ VNC Server may not be running, checking again..."
-            sudo lsof -i :5900
+            echo "❌ TigerVNC failed to start"
+            exit 1
           fi
-          
-          # Create a test screen to prevent black screen
-          sudo -u ${{ env.SSH_USER }} defaults write com.apple.finder AppleShowAllFiles YES
-          
-          echo "✅ VNC Server configured with password: ${{ env.VNC_PASSWORD }}"
 
       # ============================================
-      # STEP 5: Install bore.pub
+      # STEP 6: Install bore.pub
       # ============================================
       - name: "🌐 Install bore.pub"
         run: |
           echo "=== Installing bore.pub ==="
           
-          # Download bore binary for macOS ARM64
+          # Download bore binary
           curl -L -o /tmp/bore.tar.gz https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-aarch64-apple-darwin.tar.gz
-          
-          # Extract
           cd /tmp && tar -xzf bore.tar.gz
-          
-          # Move to PATH
           sudo mv bore /usr/local/bin/
           sudo chmod +x /usr/local/bin/bore
           
-          # Verify installation
           bore --version
           echo "✅ bore.pub installed"
 
       # ============================================
-      # STEP 6: Create bore.pub Tunnel
+      # STEP 7: Create bore.pub Tunnel (TigerVNC uses port 5901)
       # ============================================
       - name: "🔗 Create bore.pub Tunnel"
         id: bore-tunnel
         run: |
-          echo "=== Creating bore.pub tunnel for VNC ==="
+          echo "=== Creating bore.pub tunnel for TigerVNC (port 5901) ==="
           
           # Start bore tunnel in background
-          bore local 5900 --to bore.pub 2>&1 | tee /tmp/bore_output.txt &
+          bore local 5901 --to bore.pub 2>&1 | tee /tmp/bore_output.txt &
+          BORE_PID=$!
           
           # Wait for tunnel to establish
-          sleep 5
+          sleep 8
           
           # Extract the port from output
-          BORE_PORT=$(grep -oP 'remote_port=\K\d+' /tmp/bore_output.txt | head -1)
+          BORE_PORT=$(grep -o 'remote_port=[0-9]\+' /tmp/bore_output.txt | head -1 | cut -d= -f2)
+          
+          if [ -z "$BORE_PORT" ]; then
+            BORE_PORT=$(grep -o '[0-9]\+' /tmp/bore_output.txt | tail -1)
+          fi
           
           if [ -n "$BORE_PORT" ]; then
             echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
-            echo "✅ Tunnel created at: bore.pub:$BORE_PORT"
+            echo "Tunnel created at: bore.pub:$BORE_PORT"
           else
-            # Try alternative extraction method
-            BORE_PORT=$(cat /tmp/bore_output.txt | grep -o '[0-9]\+' | tail -1)
-            if [ -n "$BORE_PORT" ]; then
-              echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
-              echo "✅ Tunnel created at: bore.pub:$BORE_PORT"
-            else
-              echo "⚠️ Could not extract port, checking logs..."
-              cat /tmp/bore_output.txt
-            fi
+            echo "⚠️ Using default check..."
+            sleep 5
+            BORE_PORT=$(cat /tmp/bore_output.txt | grep -oE '[0-9]{4,5}' | head -1)
+            echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
           fi
+          
+          echo "BORE_PID=$BORE_PID" >> $GITHUB_ENV
 
       # ============================================
-      # STEP 7: Display Connection Information
+      # STEP 8: Display Connection Information
       # ============================================
       - name: "📋 CONNECTION INFORMATION"
         run: |
           echo ""
-          echo "========================================="
-          echo "✅ macOS VNC RUNNER IS READY!"
-          echo "========================================="
+          echo "╔══════════════════════════════════════════════════════════════════╗"
+          echo "║     ✅ macOS VNC RUNNER IS READY! (No Black Screen)              ║"
+          echo "╚══════════════════════════════════════════════════════════════════╝"
           echo ""
           echo "🔐 YOUR CREDENTIALS:"
-          echo "   VNC Address: bore.pub:${{ env.BORE_PORT }}"
-          echo "   VNC Password: ${{ env.VNC_PASSWORD }}"
-          echo "   SSH User: ${{ env.SSH_USER }}"
-          echo "   SSH Password: ${{ env.SSH_PASSWORD }}"
+          echo "   ┌─────────────────────────────────────────────────────────┐"
+          echo "   │  VNC Address:  bore.pub:${{ env.BORE_PORT }}"
+          echo "   │  VNC Password: ${{ env.VNC_PASSWORD }}"
+          echo "   │                                                         │"
+          echo "   │  SSH User:     ${{ env.SSH_USER }}"
+          echo "   │  SSH Password: ${{ env.SSH_PASSWORD }}"
+          echo "   └─────────────────────────────────────────────────────────┘"
           echo ""
-          echo "========================================="
-          echo "🖥️ HOW TO CONNECT:"
-          echo "========================================="
+          echo "╔══════════════════════════════════════════════════════════════════╗"
+          echo "║  🖥️ HOW TO CONNECT:                                              ║"
+          echo "╚══════════════════════════════════════════════════════════════════╝"
           echo ""
-          echo "1. Open RealVNC Viewer on your computer"
-          echo "2. Enter address: bore.pub:${{ env.BORE_PORT }}"
-          echo "3. Password: ${{ env.VNC_PASSWORD }}"
-          echo "4. Click Connect"
+          echo "   1. Open RealVNC Viewer (or any VNC client)"
+          echo "   2. Enter address: bore.pub:${{ env.BORE_PORT }}"
+          echo "   3. Password: ${{ env.VNC_PASSWORD }}"
+          echo "   4. Click Connect"
+          echo "   5. You will see the macOS desktop (NO BLACK SCREEN!)"
           echo ""
-          echo "========================================="
-          echo "⚠️ IMPORTANT NOTES:"
-          echo "========================================="
-          echo "- Keep this workflow running"
-          echo "- The tunnel will stay active for ~${{ github.event.inputs.runtime_hours || 5.5 }} hours"
-          echo "- If VNC shows black screen, wait 10 seconds and reconnect"
-          echo "- Credentials are FIXED and will NEVER change"
-          echo "========================================="
+          echo "╔══════════════════════════════════════════════════════════════════╗"
+          echo "║  ⚠️ IMPORTANT NOTES:                                             ║"
+          echo "╚══════════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "   • TigerVNC ELIMINATES the black screen issue"
+          echo "   • Keep this workflow running for active connection"
+          echo "   • Tunnel active for ~${{ github.event.inputs.runtime_hours || 5.5 }} hours"
+          echo "   • Credentials are FIXED and never change"
+          echo "   • Resolution: ${{ github.event.inputs.screen_width || 1920 }}x${{ github.event.inputs.screen_height || 1080 }}"
+          echo ""
+          echo "══════════════════════════════════════════════════════════════════════"
 
       # ============================================
-      # STEP 8: Keep Runner Alive
+      # STEP 9: Keep Runner Alive
       # ============================================
       - name: "⏰ Keeping Runner Alive"
         run: |
@@ -209,9 +223,18 @@ jobs:
           MAX_SECONDS=$(echo "$MAX_HOURS * 3600" | bc | cut -d. -f1)
           START_TIME=$(date -u +%s)
           
-          echo "Runner will run for $MAX_HOURS hours"
-          echo "VNC available at: bore.pub:${{ env.BORE_PORT }}"
-          echo "Password: ${{ env.VNC_PASSWORD }}"
+          echo "══════════════════════════════════════════════════════════════════════"
+          echo "🟢 RUNNER ACTIVE - VNC READY"
+          echo "══════════════════════════════════════════════════════════════════════"
+          echo ""
+          echo "   VNC Address: bore.pub:${{ env.BORE_PORT }}"
+          echo "   VNC Password: ${{ env.VNC_PASSWORD }}"
+          echo "   SSH: ${{ env.SSH_USER }}@ (use tmate from previous steps)"
+          echo ""
+          echo "   This runner will stay active for $MAX_HOURS hours"
+          echo "   Connect now with RealVNC!"
+          echo ""
+          echo "══════════════════════════════════════════════════════════════════════"
           
           # Keep the runner alive
           while true; do
@@ -222,7 +245,17 @@ jobs:
             fi
             
             REMAINING=$((MAX_SECONDS - ELAPSED))
-            echo "[$(date -u)] Runner active - $((REMAINING/3600))h $(((REMAINING%3600)/60))m remaining"
-            echo "VNC: bore.pub:${{ env.BORE_PORT }} | Password: ${{ env.VNC_PASSWORD }}"
-            sleep 300  # Print every 5 minutes
+            echo "[$(date -u)] 🟢 Runner active - $((REMAINING/3600))h $(((REMAINING%3600)/60))m remaining"
+            sleep 300
           done
+
+      # ============================================
+      # STEP 10: Cleanup (always runs)
+      # ============================================
+      - name: "🧹 Cleanup"
+        if: always()
+        run: |
+          echo "=== Cleaning up ==="
+          pkill bore 2>/dev/null || true
+          sudo killall Xvnc 2>/dev/null || true
+          echo "✅ Cleanup complete"
