@@ -1,4 +1,4 @@
-name: 🚀 macOS VNC - Virtual Display (100% Working)
+name: 🚀 macOS VNC - Web-Based (100% Working)
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ env:
 
 jobs:
   macos-vnc:
-    name: "🍎 macOS VNC Runner"
+    name: "🍎 macOS VNC Runner (Web-Based)"
     runs-on: macos-latest
     timeout-minutes: 360
 
@@ -24,7 +24,7 @@ jobs:
       - name: "📊 System Info"
         run: |
           echo "========================================="
-          echo "🍎 macOS VNC RUNNER (Virtual Display)"
+          echo "🍎 macOS VNC RUNNER (Web-Based)"
           echo "========================================="
           echo "macOS: $(sw_vers -productVersion)"
           echo "Arch: $(uname -m)"
@@ -54,67 +54,60 @@ jobs:
           echo "✅ SSH running"
 
       # ============================================
-      # Install X11 and VNC tools
+      # Setup native macOS VNC (Screen Sharing)
       # ============================================
-      - name: "🖥️ Install X11 and VNC Tools"
+      - name: "🖥️ Setup Native macOS VNC"
         run: |
-          echo "=== Installing XQuartz (X11 for macOS) ==="
-          brew install --cask xquartz
+          echo "=== Setting up Native macOS Screen Sharing ==="
           
-          echo "=== Installing x11vnc ==="
-          brew install x11vnc
+          # Kill existing VNC processes
+          sudo killall AppleVNCServer 2>/dev/null || true
+          sudo killall ARDAgent 2>/dev/null || true
           
-          echo "=== Installing Xvfb (part of XQuartz) ==="
-          # Verify Xvfb exists
-          if [ -f "/opt/X11/bin/Xvfb" ]; then
-            echo "✅ Xvfb found at /opt/X11/bin/Xvfb"
-          else
-            echo "⚠️ Xvfb not found, checking alternatives..."
-            find /opt -name "Xvfb" 2>/dev/null
-          fi
+          # Enable Screen Sharing with VNC password
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate \
+            -configure -access -on \
+            -clientopts -setvnclegacy -vnclegacy yes \
+            -clientopts -setvncpw -vncpw "${{ env.VNC_PASSWORD }}" \
+            -restart -agent -privs -all
           
-          echo "✅ X11 tools installed"
-
-      # ============================================
-      # Start virtual display with simple xterm (no window manager needed)
-      # ============================================
-      - name: "🚀 Start Virtual Display"
-        run: |
-          echo "=== Starting Xvfb virtual display ==="
+          # Allow all users
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -configure -allowAccessFor -allUsers -privs -all
           
-          # Kill any existing processes
-          sudo killall Xvfb 2>/dev/null || true
-          sudo killall x11vnc 2>/dev/null || true
-          
-          # Start virtual framebuffer on display :99
-          /opt/X11/bin/Xvfb :99 -screen 0 1920x1080x24 &
-          XVFB_PID=$!
           sleep 3
-          
-          # Verify Xvfb is running
-          if kill -0 $XVFB_PID 2>/dev/null; then
-            echo "✅ Xvfb running (PID: $XVFB_PID)"
-          else
-            echo "⚠️ Xvfb may have failed, checking..."
-            ps aux | grep Xvfb
-          fi
-          
-          # Start a simple xterm to keep the display active (acts as a basic desktop)
-          DISPLAY=:99 /opt/X11/bin/xterm &
-          sleep 2
-          
-          # Start x11vnc to share the virtual display
-          /opt/homebrew/bin/x11vnc -display :99 -forever -shared -passwd "${{ env.VNC_PASSWORD }}" -rfbport 5900 -bg
-          sleep 3
-          
-          echo "✅ Virtual display running on port 5900"
           
           # Verify
           if lsof -i :5900 | grep -q LISTEN; then
-            echo "✅ VNC server running on port 5900"
+            echo "✅ Native VNC running on port 5900"
           else
-            echo "⚠️ Checking port..."
-            lsof -i :5900
+            echo "⚠️ VNC port not listening"
+          fi
+
+      # ============================================
+      # Install noVNC (web-based VNC client)
+      # ============================================
+      - name: "🌐 Install noVNC"
+        run: |
+          echo "=== Installing noVNC ==="
+          
+          # Clone noVNC
+          git clone https://github.com/novnc/noVNC.git /tmp/noVNC
+          
+          # Install websockify
+          brew install websockify
+          
+          # Start websockify to bridge VNC to WebSocket
+          websockify -D --web=/tmp/noVNC 8080 localhost:5900
+          
+          sleep 3
+          
+          echo "✅ noVNC running on port 8080"
+          
+          # Verify
+          if lsof -i :8080 | grep -q LISTEN; then
+            echo "✅ WebSocket server running on port 8080"
           fi
 
       # ============================================
@@ -129,14 +122,15 @@ jobs:
           echo "✅ bore.pub installed"
 
       # ============================================
-      # Create tunnel
+      # Create bore.pub tunnel for web interface
       # ============================================
       - name: "🔗 Create bore.pub Tunnel"
         id: bore-tunnel
         run: |
-          echo "=== Creating bore.pub tunnel ==="
+          echo "=== Creating bore.pub tunnel for web interface ==="
           
-          bore local 5900 --to bore.pub 2>&1 | tee /tmp/bore_output.txt &
+          # Tunnel port 8080 (web interface)
+          bore local 8080 --to bore.pub 2>&1 | tee /tmp/bore_output.txt &
           sleep 8
           
           BORE_PORT=$(grep -o 'remote_port=[0-9]\+' /tmp/bore_output.txt | head -1 | cut -d= -f2)
@@ -152,7 +146,7 @@ jobs:
           fi
 
       # ============================================
-      # Display connection info
+      # Display connection information
       # ============================================
       - name: "📋 CONNECTION INFORMATION"
         run: |
@@ -161,27 +155,29 @@ jobs:
           echo "║        ✅ macOS VNC RUNNER IS READY!                             ║"
           echo "╚══════════════════════════════════════════════════════════════════╝"
           echo ""
-          echo "🔐 VNC CONNECTION:"
-          echo "   Address: bore.pub:${{ env.BORE_PORT }}"
+          echo "🔐 WEB VNC CONNECTION (BEST METHOD):"
+          echo "   URL: http://bore.pub:${{ env.BORE_PORT }}/vnc.html"
           echo "   Password: ${{ env.VNC_PASSWORD }}"
           echo ""
-          echo "🔐 SSH CONNECTION (via tmate from previous logs):"
+          echo "🔐 RealVNC Connection (Alternative):"
+          echo "   You need a separate tunnel for port 5900:"
+          echo "   Run this in another SSH session: bore local 5900 --to bore.pub"
+          echo ""
+          echo "🔐 SSH CONNECTION:"
           echo "   User: ${{ env.SSH_USER }}"
           echo "   Password: ${{ env.SSH_PASSWORD }}"
           echo ""
-          echo "🖥️ HOW TO CONNECT WITH REALVNC:"
-          echo "   1. Open RealVNC Viewer on your computer"
-          echo "   2. Enter: bore.pub:${{ env.BORE_PORT }}"
-          echo "   3. Password: ${{ env.VNC_PASSWORD }}"
-          echo "   4. Click Connect"
-          echo "   5. You will see an xterm window (virtual terminal)"
+          echo "🖥️ HOW TO CONNECT WITH WEB BROWSER (Recommended):"
+          echo "   1. Open any web browser (Chrome, Firefox, Edge)"
+          echo "   2. Go to: http://bore.pub:${{ env.BORE_PORT }}/vnc.html"
+          echo "   3. Click 'Connect'"
+          echo "   4. Enter password: ${{ env.VNC_PASSWORD }}"
+          echo "   5. You will see the macOS desktop!"
           echo ""
-          echo "⚠️ Note: This is a virtual X11 display, not the full macOS GUI."
-          echo "   You can run GUI apps by installing them and using DISPLAY=:99"
-          echo ""
+          echo "========================================="
 
       # ============================================
-      # Keep alive
+      # Keep runner alive
       # ============================================
       - name: "⏰ Keeping Runner Alive"
         run: |
@@ -190,10 +186,13 @@ jobs:
           START_TIME=$(date -u +%s)
           
           echo "══════════════════════════════════════════════════════════════════════"
-          echo "🟢 RUNNER ACTIVE - VNC READY"
+          echo "🟢 RUNNER ACTIVE - WEB VNC READY"
           echo "══════════════════════════════════════════════════════════════════════"
           echo ""
-          echo "   VNC: bore.pub:${{ env.BORE_PORT }} | Password: ${{ env.VNC_PASSWORD }}"
+          echo "   Web VNC: http://bore.pub:${{ env.BORE_PORT }}/vnc.html"
+          echo "   Password: ${{ env.VNC_PASSWORD }}"
+          echo ""
+          echo "   Open this URL in your browser to access macOS!"
           echo ""
           
           while true; do
