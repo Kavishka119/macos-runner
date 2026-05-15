@@ -1,145 +1,73 @@
-name: 🚀 macOS Runner - SSH + VNC Access
+name: 🚀 macOS Runner - FREE (Public Repo)
 
 on:
   workflow_dispatch:
-    inputs:
-      max_hours:
-        description: 'Maximum runtime in hours (max 6)'
-        type: number
-        default: 5.5
-        required: false
+  schedule:
+    - cron: '30 */5 * * *'
 
 env:
-  # FIXED CREDENTIALS - Save these!
   SSH_USER: "kavishka"
   SSH_PASSWORD: "26119"
   VNC_PASSWORD: "26119"
 
 jobs:
   macos-runner:
-    name: "🍎 macOS Runner"
-    runs-on: macos-26-xlarge
-    timeout-minutes: 360  # 6 hour limit
+    runs-on: macos-latest  # ✅ FREE - No payment method needed!
+    timeout-minutes: 360
 
     steps:
-      # ========================================
-      # STEP 1: System Information
-      # ========================================
       - name: "📊 System Info"
         run: |
           echo "========================================="
-          echo "🍎 macOS RUNNER STARTING"
+          echo "🍎 macOS RUNNER (FREE - Standard Runner)"
           echo "========================================="
           echo "macOS: $(sw_vers -productVersion)"
           echo "Arch: $(uname -m)"
-          echo "CPU: $(sysctl -n hw.ncpu) cores"
-          echo "RAM: $(sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}')"
-          echo "Disk: $(df -h / | awk 'NR==2 {print $4}') free"
           echo "========================================="
 
-      # ========================================
-      # STEP 2: Create User Account
-      # ========================================
       - name: "👤 Create User: ${{ env.SSH_USER }}"
         run: |
-          # Delete if exists (clean slate)
           sudo dscl . -delete /Users/${{ env.SSH_USER }} 2>/dev/null || true
-          
-          # Create user
           sudo dscl . -create /Users/${{ env.SSH_USER }}
           sudo dscl . -create /Users/${{ env.SSH_USER }} UserShell /bin/bash
-          sudo dscl . -create /Users/${{ env.SSH_USER }} RealName "macOS Runner User"
+          sudo dscl . -create /Users/${{ env.SSH_USER }} RealName "macOS Runner"
           sudo dscl . -create /Users/${{ env.SSH_USER }} UniqueID 1500
           sudo dscl . -create /Users/${{ env.SSH_USER }} PrimaryGroupID 20
           sudo dscl . -create /Users/${{ env.SSH_USER }} NFSHomeDirectory /Users/${{ env.SSH_USER }}
-          
-          # Set password
           sudo dscl . -passwd /Users/${{ env.SSH_USER }} "${{ env.SSH_PASSWORD }}"
-          
-          # Create home directory
           sudo createhomedir -c -u ${{ env.SSH_USER }} 2>/dev/null || true
-          
-          # Add to admin group
           sudo dscl . -append /Groups/admin GroupMembership ${{ env.SSH_USER }}
-          
           echo "✅ User ${{ env.SSH_USER }} created"
-          echo "✅ Password: ${{ env.SSH_PASSWORD }}"
 
-      # ========================================
-      # STEP 3: Setup SSH Server
-      # ========================================
       - name: "🔐 Setup SSH Server"
         run: |
-          # Enable Remote Login
           sudo systemsetup -setremotelogin on
-          
-          # Configure SSH
           sudo sed -i '' 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i '' 's/#PermitEmptyPasswords no/PermitEmptyPasswords no/' /etc/ssh/sshd_config
-          sudo sed -i '' 's/#ChallengeResponseAuthentication yes/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
-          
-          # Allow our user
           echo "AllowUsers ${{ env.SSH_USER }}" | sudo tee -a /etc/ssh/sshd_config
-          
-          # Restart SSH service
           sudo launchctl unload /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
           sudo launchctl load /System/Library/LaunchDaemons/ssh.plist
-          
-          # Verify
-          if sudo systemsetup -getremotelogin | grep -q "On"; then
-            echo "✅ SSH Server is running"
-          else
-            echo "❌ SSH Server failed to start"
-            exit 1
-          fi
+          echo "✅ SSH Server running"
 
-      # ========================================
-      # STEP 4: Setup VNC Server
-      # ========================================
       - name: "🖥️ Setup VNC Server"
         run: |
-          # Enable Screen Sharing with VNC
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate \
-            -configure -access -on \
+            -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "${{ env.VNC_PASSWORD }}" \
             -restart -agent -privs -all
-          
-          # Allow our user
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -users ${{ env.SSH_USER }} -access -on \
-            -privs -all
-          
-          # Wait for VNC to start
-          sleep 3
-          
-          # Verify
-          if nc -z localhost 5900; then
-            echo "✅ VNC Server running on port 5900"
-          else
-            echo "⚠️ VNC port not responding, but might still work"
-          fi
+          echo "✅ VNC Server running (Password: ${{ env.VNC_PASSWORD }})"
 
-      # ========================================
-      # STEP 5: Install TMATE (Creates external tunnel)
-      # ========================================
       - name: "🌐 Install TMATE"
         run: |
           brew install tmate
           echo "✅ TMATE installed"
 
-      # ========================================
-      # STEP 6: Start TMATE Tunnel (YOUR CONNECTION)
-      # ========================================
       - name: "🔗 START TMATE TUNNEL - COPY THIS COMMAND"
-        id: tmate
         run: |
-          # Start tmate in background
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
           
-          # Get connection info
+          echo ""
           echo "========================================="
           echo "🔗 YOUR SSH CONNECTION COMMAND"
           echo "========================================="
@@ -147,23 +75,19 @@ jobs:
           tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'
           echo ""
           echo "========================================="
-          echo "🔗 YOUR SSH CONNECTION WITH VNC TUNNEL"
+          echo "🔗 VNC TUNNEL COMMAND"
           echo "========================================="
           echo ""
           tmate -S /tmp/tmate.sock display -p 'ssh -L 5900:localhost:5900 -p #{tmate_ssh_port} #{tmate_ssh_host}'
           echo ""
           echo "========================================="
-          echo "📝 SAVE THESE COMMANDS!"
+          echo "🔐 CREDENTIALS (SAVE THESE):"
+          echo "   SSH User: ${{ env.SSH_USER }}"
+          echo "   SSH Password: ${{ env.SSH_PASSWORD }}"
+          echo "   VNC Password: ${{ env.VNC_PASSWORD }}"
           echo "========================================="
           
-          # Save to file
-          tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' > /tmp/ssh_command.txt
-          tmate -S /tmp/tmate.sock display -p 'ssh -L 5900:localhost:5900 -p #{tmate_ssh_port} #{tmate_ssh_host}' > /tmp/vnc_tunnel.txt
-          
-          # Keep tmate running
-          while true; do
-            sleep 60
-          done
+          while true; do sleep 60; done
 
       # ========================================
       # STEP 7: Display Connection Info
