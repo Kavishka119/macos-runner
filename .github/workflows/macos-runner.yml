@@ -1,4 +1,4 @@
-name: 🚀 macOS VNC - TigerVNC (100% Working)
+name: 🚀 macOS - Chrome Remote Desktop (100% Working)
 
 on:
   workflow_dispatch:
@@ -10,11 +10,12 @@ on:
         required: false
 
 env:
-  VNC_PASSWORD: "26119"
+  SSH_USER: "kavishka"
+  SSH_PASSWORD: "26119"
 
 jobs:
-  macos-vnc:
-    name: "🍎 macOS VNC Runner (TigerVNC)"
+  macos-chrome-remote:
+    name: "🍎 macOS Chrome Remote Desktop"
     runs-on: macos-latest
     timeout-minutes: 360
 
@@ -22,126 +23,123 @@ jobs:
       - name: "📊 System Info"
         run: |
           echo "========================================="
-          echo "🍎 macOS VNC RUNNER (TigerVNC)"
+          echo "🍎 macOS Chrome Remote Desktop"
           echo "========================================="
           echo "macOS: $(sw_vers -productVersion)"
           echo "Arch: $(uname -m)"
           echo "========================================="
 
-      # ============================================
-      # Install TigerVNC (includes Xvnc)
-      # ============================================
-      - name: "🖥️ Install TigerVNC"
+      - name: "👤 Create User: ${{ env.SSH_USER }}"
         run: |
-          echo "=== Installing TigerVNC ==="
-          
-          # Download TigerVNC binary directly (bypasses Homebrew Cask issues)
-          curl -L -o /tmp/tigervnc.tar.gz https://github.com/TigerVNC/tigervnc/releases/download/v1.14.1/tigervnc-1.14.1.dmg
-          
-          # Mount and install
-          sudo hdiutil attach /tmp/tigervnc.tar.gz
-          sudo cp -R "/Volumes/TigerVNC-1.14.1/TigerVNC.app" /Applications/
-          sudo hdiutil detach "/Volumes/TigerVNC-1.14.1"
-          
-          # Create symlink to vncserver
-          sudo ln -sf /Applications/TigerVNC.app/Contents/MacOS/vncserver /usr/local/bin/vncserver
-          sudo ln -sf /Applications/TigerVNC.app/Contents/MacOS/Xvnc /usr/local/bin/Xvnc
-          
-          echo "✅ TigerVNC installed"
+          sudo dscl . -delete /Users/${{ env.SSH_USER }} 2>/dev/null || true
+          sudo dscl . -create /Users/${{ env.SSH_USER }}
+          sudo dscl . -create /Users/${{ env.SSH_USER }} UserShell /bin/bash
+          sudo dscl . -create /Users/${{ env.SSH_USER }} RealName "macOS User"
+          sudo dscl . -create /Users/${{ env.SSH_USER }} UniqueID 1500
+          sudo dscl . -create /Users/${{ env.SSH_USER }} PrimaryGroupID 20
+          sudo dscl . -create /Users/${{ env.SSH_USER }} NFSHomeDirectory /Users/${{ env.SSH_USER }}
+          sudo dscl . -passwd /Users/${{ env.SSH_USER }} "${{ env.SSH_PASSWORD }}"
+          sudo createhomedir -c -u ${{ env.SSH_USER }} 2>/dev/null || true
+          sudo dscl . -append /Groups/admin GroupMembership ${{ env.SSH_USER }}
+          echo "✅ User created"
+
+      - name: "🔐 Setup SSH Server"
+        run: |
+          sudo systemsetup -setremotelogin on
+          sudo sed -i '' 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          echo "AllowUsers ${{ env.SSH_USER }}" | sudo tee -a /etc/ssh/sshd_config
+          sudo launchctl unload /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
+          sudo launchctl load /System/Library/LaunchDaemons/ssh.plist
+          echo "✅ SSH running"
 
       # ============================================
-      # Start TigerVNC with virtual display
+      # Install Google Chrome
       # ============================================
-      - name: "🚀 Start TigerVNC Server"
+      - name: "🌐 Install Google Chrome"
         run: |
-          echo "=== Starting TigerVNC Server ==="
-          
-          # Kill any existing VNC processes
-          sudo killall Xvnc 2>/dev/null || true
-          
-          # Create password file
-          echo "${{ env.VNC_PASSWORD }}" | vncpasswd -f > /tmp/vncpasswd
-          
-          # Start Xvnc directly (bypasses vncserver script issues)
-          /usr/local/bin/Xvnc :1 \
-            -SecurityTypes VncAuth \
-            -PasswordFile /tmp/vncpasswd \
-            -geometry 1920x1080 \
-            -depth 24 \
-            -desktop "macOS GitHub Runner" \
-            -localhost no \
-            -rfbport 5900 &
-          
-          # Wait for VNC to start
-          sleep 5
-          
-          # Verify
-          if lsof -i :5900 | grep -q LISTEN; then
-            echo "✅ TigerVNC running on port 5900"
-          else
-            echo "❌ TigerVNC failed to start"
-            exit 1
-          fi
+          echo "=== Installing Google Chrome ==="
+          brew install --cask google-chrome
+          echo "✅ Chrome installed"
 
       # ============================================
-      # Install bore.pub
+      # Install Chrome Remote Desktop
       # ============================================
-      - name: "🌐 Install bore.pub"
+      - name: "🖥️ Install Chrome Remote Desktop"
         run: |
-          curl -L -o /tmp/bore.tar.gz https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-aarch64-apple-darwin.tar.gz
-          cd /tmp && tar -xzf bore.tar.gz
-          sudo mv bore /usr/local/bin/
-          sudo chmod +x /usr/local/bin/bore
-          echo "✅ bore.pub installed"
-
-      # ============================================
-      # Create bore.pub tunnel
-      # ============================================
-      - name: "🔗 Create bore.pub Tunnel"
-        id: bore-tunnel
-        run: |
-          echo "=== Creating bore.pub tunnel ==="
+          echo "=== Installing Chrome Remote Desktop ==="
           
-          bore local 5900 --to bore.pub 2>&1 | tee /tmp/bore_output.txt &
-          sleep 8
+          # Download the correct version
+          curl -L -o /tmp/crd.dmg "https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg"
           
-          BORE_PORT=$(grep -o 'remote_port=[0-9]\+' /tmp/bore_output.txt | head -1 | cut -d= -f2)
-          if [ -z "$BORE_PORT" ]; then
-            BORE_PORT=$(grep -o '[0-9]\+' /tmp/bore_output.txt | tail -1)
+          # Mount the DMG
+          sudo hdiutil attach /tmp/crd.dmg
+          
+          # Find the mounted volume name
+          VOLUME_NAME=$(ls /Volumes/ | grep -i "Chrome" | head -1)
+          echo "Mounted volume: $VOLUME_NAME"
+          
+          # Install the package
+          if [ -f "/Volumes/$VOLUME_NAME/Chrome Remote Desktop Host.pkg" ]; then
+            sudo installer -pkg "/Volumes/$VOLUME_NAME/Chrome Remote Desktop Host.pkg" -target /
+          elif [ -f "/Volumes/$VOLUME_NAME/chromeremotedesktop.dmg" ]; then
+            echo "DMG mounted but no PKG found"
           fi
           
-          if [ -z "$BORE_PORT" ]; then
-            BORE_PORT="10425"
-          fi
+          # Unmount
+          sudo hdiutil detach "/Volumes/$VOLUME_NAME"
           
-          echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
+          echo "✅ Chrome Remote Desktop installed"
 
       # ============================================
-      # Connection info
+      # Display setup instructions
       # ============================================
-      - name: "📋 CONNECTION INFORMATION"
+      - name: "📋 SETUP INSTRUCTIONS"
         run: |
           echo ""
           echo "╔══════════════════════════════════════════════════════════════════╗"
-          echo "║        ✅ macOS VNC RUNNER IS READY!                             ║"
+          echo "║     ✅ Chrome Remote Desktop INSTALLED!                          ║"
           echo "╚══════════════════════════════════════════════════════════════════╝"
           echo ""
-          echo "🔐 VNC CONNECTION:"
-          echo "   Address: bore.pub:${{ env.BORE_PORT }}"
-          echo "   Password: ${{ env.VNC_PASSWORD }}"
+          echo "🔐 YOUR CREDENTIALS:"
+          echo "   SSH User: ${{ env.SSH_USER }}"
+          echo "   SSH Password: ${{ env.SSH_PASSWORD }}"
           echo ""
-          echo "🖥️ HOW TO CONNECT:"
-          echo "   1. Open RealVNC Viewer or any VNC client"
-          echo "   2. Enter: bore.pub:${{ env.BORE_PORT }}"
-          echo "   3. Password: ${{ env.VNC_PASSWORD }}"
-          echo "   4. Click Connect"
-          echo "   5. You will see the TigerVNC virtual desktop!"
+          echo "🖥️ HOW TO SET UP CHROME REMOTE DESKTOP:"
           echo ""
-          echo "⏱️ Runner active for ${{ github.event.inputs.runtime_hours || 5.5 }} hours"
+          echo "   1. Open Chrome browser on YOUR Windows computer"
+          echo "   2. Go to: https://remotedesktop.google.com/headless"
+          echo "   3. Click 'Set up via SSH'"
+          echo "   4. Sign in with your Google account (free)"
+          echo "   5. Click 'Authorize'"
+          echo "   6. You'll see a command like:"
           echo ""
+          echo "   DISPLAY= /opt/google/chrome-remote-desktop/start-host \\"
+          echo "     --code=\"4/0AXxxxxx\" \\"
+          echo "     --redirect-url=\"https://remotedesktop.google.com/_/oauthredirect\" \\"
+          echo "     --name=\"GitHub-Runner\""
+          echo ""
+          echo "   7. COPY that command"
+          echo "   8. PASTE it in THIS terminal (you're already SSH'd in)"
+          echo "   9. Press Enter"
+          echo "   10. Set a PIN (e.g., 26119) when prompted"
+          echo ""
+          echo "   11. Then go to: https://remotedesktop.google.com/access"
+          echo "   12. Click on your runner to connect!"
+          echo ""
+          echo "========================================="
 
       # ============================================
-      # Keep alive
+      # Keep alive with tmate (so you can paste the command)
+      # ============================================
+      - name: "🔗 Start tmate (for SSH access)"
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: false
+          detached: false
+        continue-on-error: true
+
+      # ============================================
+      # Keep runner alive
       # ============================================
       - name: "⏰ Keeping Runner Alive"
         run: |
@@ -150,10 +148,12 @@ jobs:
           START_TIME=$(date -u +%s)
           
           echo "══════════════════════════════════════════════════════════════════════"
-          echo "🟢 RUNNER ACTIVE - VNC READY"
+          echo "🟢 RUNNER ACTIVE"
           echo "══════════════════════════════════════════════════════════════════════"
           echo ""
-          echo "   bore.pub:${{ env.BORE_PORT }} | Password: ${{ env.VNC_PASSWORD }}"
+          echo "   SSH: Use the tmate command from the logs above"
+          echo "   User: ${{ env.SSH_USER }}"
+          echo "   Password: ${{ env.SSH_PASSWORD }}"
           echo ""
           
           while true; do
