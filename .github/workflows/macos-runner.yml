@@ -1,4 +1,4 @@
-name: 🚀 macOS Runner - FREE (Public Repo)
+name: 🚀 macOS Runner - SSH + VNC (FIXED)
 
 on:
   workflow_dispatch:
@@ -12,14 +12,14 @@ env:
 
 jobs:
   macos-runner:
-    runs-on: macos-latest  # ✅ FREE - No payment method needed!
+    runs-on: macos-latest
     timeout-minutes: 360
 
     steps:
       - name: "📊 System Info"
         run: |
           echo "========================================="
-          echo "🍎 macOS RUNNER (FREE - Standard Runner)"
+          echo "🍎 macOS RUNNER STARTING"
           echo "========================================="
           echo "macOS: $(sw_vers -productVersion)"
           echo "Arch: $(uname -m)"
@@ -62,85 +62,49 @@ jobs:
           brew install tmate
           echo "✅ TMATE installed"
 
-      - name: "🔗 START TMATE TUNNEL - COPY THIS COMMAND"
+      - name: "🔗 START TMATE - COPY THESE COMMANDS"
         run: |
+          # Start tmate
           tmate -S /tmp/tmate.sock new-session -d
+          sleep 3
           tmate -S /tmp/tmate.sock wait tmate-ready
+          sleep 2
+          
+          # Get connection info
+          SSH_CMD=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          SSH_PORT=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh_port}')
+          SSH_HOST=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh_host}')
           
           echo ""
           echo "========================================="
           echo "🔗 YOUR SSH CONNECTION COMMAND"
           echo "========================================="
           echo ""
-          tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'
+          echo "$SSH_CMD"
           echo ""
           echo "========================================="
           echo "🔗 VNC TUNNEL COMMAND"
           echo "========================================="
           echo ""
-          tmate -S /tmp/tmate.sock display -p 'ssh -L 5900:localhost:5900 -p #{tmate_ssh_port} #{tmate_ssh_host}'
+          echo "ssh -L 5900:localhost:5900 -p $SSH_PORT $SSH_HOST"
           echo ""
           echo "========================================="
-          echo "🔐 CREDENTIALS (SAVE THESE):"
+          echo "🔐 YOUR CREDENTIALS (SAVE THESE):"
           echo "   SSH User: ${{ env.SSH_USER }}"
           echo "   SSH Password: ${{ env.SSH_PASSWORD }}"
           echo "   VNC Password: ${{ env.VNC_PASSWORD }}"
           echo "========================================="
+          echo ""
+          echo "📝 HOW TO CONNECT:"
+          echo "1. Copy the SSH command above"
+          echo "2. Paste in your terminal"
+          echo "3. Run: su - kavishka (password: 26119)"
+          echo "4. For VNC: Run the VNC tunnel command in NEW terminal"
+          echo "5. Open RealVNC → localhost:5900 → password: 26119"
+          echo "========================================="
           
-          while true; do sleep 60; done
-
-      # ========================================
-      # STEP 7: Display Connection Info
-      # ========================================
-      - name: "📋 CONNECTION INFORMATION"
-        run: |
-          echo ""
-          echo "========================================="
-          echo "✅ macOS RUNNER IS READY!"
-          echo "========================================="
-          echo ""
-          echo "🔐 YOUR CREDENTIALS (SAVE THESE):"
-          echo "   SSH Username: ${{ env.SSH_USER }}"
-          echo "   SSH Password: ${{ env.SSH_PASSWORD }}"
-          echo "   VNC Password: ${{ env.VNC_PASSWORD }}"
-          echo ""
-          echo "========================================="
-          echo "🌐 HOW TO CONNECT:"
-          echo "========================================="
-          echo ""
-          echo "1. Look ABOVE in the logs for the TMATE command"
-          echo "   It looks like: ssh -p 12345 abc123@nyc1.tmate.io"
-          echo ""
-          echo "2. Copy that command and paste in YOUR terminal"
-          echo ""
-          echo "3. For VNC, use the tunnel command:"
-          echo "   ssh -L 5900:localhost:5900 -p 12345 abc123@nyc1.tmate.io"
-          echo ""
-          echo "4. Open RealVNC and connect to: localhost:5900"
-          echo "   Password: ${{ env.VNC_PASSWORD }}"
-          echo ""
-          echo "========================================="
-
-      # ========================================
-      # STEP 8: Keep Runner Alive
-      # ========================================
-      - name: "⏰ Keeping Runner Alive"
-        run: |
-          MAX_HOURS=${{ github.event.inputs.max_hours || 5.5 }}
-          MAX_SECONDS=$(echo "$MAX_HOURS * 3600" | bc | cut -d. -f1)
-          
-          echo "Runner will run for $MAX_HOURS hours"
-          echo "SSH and VNC are active during this time"
-          
-          # Create status file
+          # Keep tmate running
           while true; do
-            ELAPSED=$(($(date -u +%s) - ${{ github.run_started_at }}))
-            if [ $ELAPSED -ge $MAX_SECONDS ]; then
-              echo "Time limit reached, stopping..."
-              break
-            fi
-            
-            REMAINING=$((MAX_SECONDS - ELAPSED))
-            echo "[$(date -u)] Runner active - $((REMAINING/3600))h $(((REMAINING%3600)/60))m remaining"
-            sleep 300  # Print every 5 minutes
+            echo "Runner active at $(date) - SSH tunnel running"
+            sleep 300
           done
