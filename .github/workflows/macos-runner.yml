@@ -78,37 +78,74 @@ jobs:
           
           sleep 3
           
-          # Verify
+          # Check if VNC is running
           if lsof -i :5900 | grep -q LISTEN; then
             echo "✅ Native VNC running on port 5900"
           else
-            echo "⚠️ VNC port not listening"
+            echo "⚠️ Trying to restart VNC..."
+            sudo launchctl unload /System/Library/LaunchDaemons/com.apple.ARDAgent.plist 2>/dev/null
+            sleep 2
+            sudo launchctl load /System/Library/LaunchDaemons/com.apple.ARDAgent.plist
+            sleep 3
+            lsof -i :5900
           fi
 
       # ============================================
-      # Install noVNC (web-based VNC client)
+      # Install noVNC and setup Python WebSocket proxy
       # ============================================
-      - name: "🌐 Install noVNC"
+      - name: "🌐 Install noVNC and WebSocket Proxy"
         run: |
           echo "=== Installing noVNC ==="
           
           # Clone noVNC
           git clone https://github.com/novnc/noVNC.git /tmp/noVNC
           
-          # Install websockify
-          brew install websockify
+          # Create a simple Python WebSocket proxy
+          cat > /tmp/websocket_proxy.py << 'PYTHON'
+          #!/usr/bin/env python3
+          import asyncio
+          import websockets
+          import socket
+          import sys
           
-          # Start websockify to bridge VNC to WebSocket
-          websockify -D --web=/tmp/noVNC 8080 localhost:5900
+          async def proxy(websocket, path):
+              # Connect to VNC server
+              reader, writer = await asyncio.open_connection('localhost', 5900)
+              
+              async def vnc_to_ws():
+                  while True:
+                      data = await reader.read(4096)
+                      if not data:
+                          break
+                      await websocket.send(data)
+              
+              async def ws_to_vnc():
+                  while True:
+                      data = await websocket.recv()
+                      writer.write(data)
+                      await writer.drain()
+              
+              try:
+                  await asyncio.gather(vnc_to_ws(), ws_to_vnc())
+              except:
+                  pass
+              finally:
+                  writer.close()
           
+          start_server = websockets.serve(proxy, '0.0.0.0', 8080)
+          print('WebSocket proxy running on port 8080')
+          asyncio.get_event_loop().run_until_complete(start_server)
+          asyncio.get_event_loop().run_forever()
+          PYTHON
+          
+          # Install websockets Python package
+          pip3 install websockets
+          
+          # Start the proxy in background
+          python3 /tmp/websocket_proxy.py &
           sleep 3
           
-          echo "✅ noVNC running on port 8080"
-          
-          # Verify
-          if lsof -i :8080 | grep -q LISTEN; then
-            echo "✅ WebSocket server running on port 8080"
-          fi
+          echo "✅ WebSocket proxy running on port 8080"
 
       # ============================================
       # Install bore.pub
@@ -155,26 +192,23 @@ jobs:
           echo "║        ✅ macOS VNC RUNNER IS READY!                             ║"
           echo "╚══════════════════════════════════════════════════════════════════╝"
           echo ""
-          echo "🔐 WEB VNC CONNECTION (BEST METHOD):"
+          echo "🔐 WEB VNC CONNECTION:"
           echo "   URL: http://bore.pub:${{ env.BORE_PORT }}/vnc.html"
           echo "   Password: ${{ env.VNC_PASSWORD }}"
-          echo ""
-          echo "🔐 RealVNC Connection (Alternative):"
-          echo "   You need a separate tunnel for port 5900:"
-          echo "   Run this in another SSH session: bore local 5900 --to bore.pub"
           echo ""
           echo "🔐 SSH CONNECTION:"
           echo "   User: ${{ env.SSH_USER }}"
           echo "   Password: ${{ env.SSH_PASSWORD }}"
           echo ""
-          echo "🖥️ HOW TO CONNECT WITH WEB BROWSER (Recommended):"
-          echo "   1. Open any web browser (Chrome, Firefox, Edge)"
+          echo "🖥️ HOW TO CONNECT WITH WEB BROWSER:"
+          echo "   1. Open any web browser (Chrome, Firefox, Edge, Safari)"
           echo "   2. Go to: http://bore.pub:${{ env.BORE_PORT }}/vnc.html"
-          echo "   3. Click 'Connect'"
+          echo "   3. Click 'Connect' (no need to change settings)"
           echo "   4. Enter password: ${{ env.VNC_PASSWORD }}"
           echo "   5. You will see the macOS desktop!"
           echo ""
-          echo "========================================="
+          echo "⚠️ If the page doesn't load, wait 10 seconds and refresh"
+          echo ""
 
       # ============================================
       # Keep runner alive
