@@ -54,7 +54,7 @@ jobs:
           echo "✅ SSH running"
 
       # ============================================
-      # Install X11 and virtual display tools
+      # Install X11 and VNC tools
       # ============================================
       - name: "🖥️ Install X11 and VNC Tools"
         run: |
@@ -64,12 +64,19 @@ jobs:
           echo "=== Installing x11vnc ==="
           brew install x11vnc
           
-          echo "=== Installing Xvfb (virtual framebuffer) ==="
-          # Xvfb is part of XQuartz
+          echo "=== Installing Xvfb (part of XQuartz) ==="
+          # Verify Xvfb exists
+          if [ -f "/opt/X11/bin/Xvfb" ]; then
+            echo "✅ Xvfb found at /opt/X11/bin/Xvfb"
+          else
+            echo "⚠️ Xvfb not found, checking alternatives..."
+            find /opt -name "Xvfb" 2>/dev/null
+          fi
+          
           echo "✅ X11 tools installed"
 
       # ============================================
-      # Start virtual display
+      # Start virtual display with simple xterm (no window manager needed)
       # ============================================
       - name: "🚀 Start Virtual Display"
         run: |
@@ -81,15 +88,23 @@ jobs:
           
           # Start virtual framebuffer on display :99
           /opt/X11/bin/Xvfb :99 -screen 0 1920x1080x24 &
+          XVFB_PID=$!
           sleep 3
           
-          # Start window manager (simple one)
-          brew install fluxbox
-          DISPLAY=:99 fluxbox &
+          # Verify Xvfb is running
+          if kill -0 $XVFB_PID 2>/dev/null; then
+            echo "✅ Xvfb running (PID: $XVFB_PID)"
+          else
+            echo "⚠️ Xvfb may have failed, checking..."
+            ps aux | grep Xvfb
+          fi
+          
+          # Start a simple xterm to keep the display active (acts as a basic desktop)
+          DISPLAY=:99 /opt/X11/bin/xterm &
           sleep 2
           
           # Start x11vnc to share the virtual display
-          x11vnc -display :99 -forever -shared -passwd "${{ env.VNC_PASSWORD }}" -rfbport 5900 &
+          /opt/homebrew/bin/x11vnc -display :99 -forever -shared -passwd "${{ env.VNC_PASSWORD }}" -rfbport 5900 -bg
           sleep 3
           
           echo "✅ Virtual display running on port 5900"
@@ -98,7 +113,7 @@ jobs:
           if lsof -i :5900 | grep -q LISTEN; then
             echo "✅ VNC server running on port 5900"
           else
-            echo "⚠️ Checking..."
+            echo "⚠️ Checking port..."
             lsof -i :5900
           fi
 
@@ -137,40 +152,54 @@ jobs:
           fi
 
       # ============================================
-      # Connection info
+      # Display connection info
       # ============================================
-      - name: "📋 CONNECTION INFO"
+      - name: "📋 CONNECTION INFORMATION"
         run: |
           echo ""
           echo "╔══════════════════════════════════════════════════════════════════╗"
           echo "║        ✅ macOS VNC RUNNER IS READY!                             ║"
           echo "╚══════════════════════════════════════════════════════════════════╝"
           echo ""
-          echo "🔐 VNC Address:  bore.pub:${{ env.BORE_PORT }}"
-          echo "🔐 VNC Password: ${{ env.VNC_PASSWORD }}"
+          echo "🔐 VNC CONNECTION:"
+          echo "   Address: bore.pub:${{ env.BORE_PORT }}"
+          echo "   Password: ${{ env.VNC_PASSWORD }}"
           echo ""
-          echo "   SSH User:     ${{ env.SSH_USER }}"
-          echo "   SSH Password: ${{ env.SSH_PASSWORD }}"
+          echo "🔐 SSH CONNECTION (via tmate from previous logs):"
+          echo "   User: ${{ env.SSH_USER }}"
+          echo "   Password: ${{ env.SSH_PASSWORD }}"
           echo ""
-          echo "🖥️ Connect with RealVNC Viewer:"
-          echo "   bore.pub:${{ env.BORE_PORT }}"
+          echo "🖥️ HOW TO CONNECT WITH REALVNC:"
+          echo "   1. Open RealVNC Viewer on your computer"
+          echo "   2. Enter: bore.pub:${{ env.BORE_PORT }}"
+          echo "   3. Password: ${{ env.VNC_PASSWORD }}"
+          echo "   4. Click Connect"
+          echo "   5. You will see an xterm window (virtual terminal)"
+          echo ""
+          echo "⚠️ Note: This is a virtual X11 display, not the full macOS GUI."
+          echo "   You can run GUI apps by installing them and using DISPLAY=:99"
           echo ""
 
       # ============================================
       # Keep alive
       # ============================================
-      - name: "⏰ Keeping Alive"
+      - name: "⏰ Keeping Runner Alive"
         run: |
           MAX_HOURS=${{ github.event.inputs.runtime_hours || 5.5 }}
           MAX_SECONDS=$(echo "$MAX_HOURS * 3600" | bc | cut -d. -f1)
           START_TIME=$(date -u +%s)
           
-          echo "Runner active for $MAX_HOURS hours"
-          echo "VNC: bore.pub:${{ env.BORE_PORT }} | Password: ${{ env.VNC_PASSWORD }}"
+          echo "══════════════════════════════════════════════════════════════════════"
+          echo "🟢 RUNNER ACTIVE - VNC READY"
+          echo "══════════════════════════════════════════════════════════════════════"
+          echo ""
+          echo "   VNC: bore.pub:${{ env.BORE_PORT }} | Password: ${{ env.VNC_PASSWORD }}"
+          echo ""
           
           while true; do
             ELAPSED=$(($(date -u +%s) - START_TIME))
             if [ $ELAPSED -ge $MAX_SECONDS ]; then
+              echo "Time limit reached, stopping..."
               break
             fi
             sleep 300
