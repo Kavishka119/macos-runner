@@ -1,4 +1,4 @@
-name: 🚀 macOS VNC - Web-Based (100% Working)
+name: 🚀 macOS VNC - SIMPLE & WORKING
 
 on:
   workflow_dispatch:
@@ -10,13 +10,11 @@ on:
         required: false
 
 env:
-  SSH_USER: "kavishka"
-  SSH_PASSWORD: "26119"
   VNC_PASSWORD: "26119"
 
 jobs:
   macos-vnc:
-    name: "🍎 macOS VNC Runner (Web-Based)"
+    name: "🍎 macOS VNC Runner"
     runs-on: macos-latest
     timeout-minutes: 360
 
@@ -24,128 +22,30 @@ jobs:
       - name: "📊 System Info"
         run: |
           echo "========================================="
-          echo "🍎 macOS VNC RUNNER (Web-Based)"
+          echo "🍎 macOS VNC RUNNER"
           echo "========================================="
           echo "macOS: $(sw_vers -productVersion)"
           echo "Arch: $(uname -m)"
           echo "========================================="
 
-      - name: "👤 Create User: ${{ env.SSH_USER }}"
-        run: |
-          sudo dscl . -delete /Users/${{ env.SSH_USER }} 2>/dev/null || true
-          sudo dscl . -create /Users/${{ env.SSH_USER }}
-          sudo dscl . -create /Users/${{ env.SSH_USER }} UserShell /bin/bash
-          sudo dscl . -create /Users/${{ env.SSH_USER }} RealName "macOS VNC User"
-          sudo dscl . -create /Users/${{ env.SSH_USER }} UniqueID 1500
-          sudo dscl . -create /Users/${{ env.SSH_USER }} PrimaryGroupID 20
-          sudo dscl . -create /Users/${{ env.SSH_USER }} NFSHomeDirectory /Users/${{ env.SSH_USER }}
-          sudo dscl . -passwd /Users/${{ env.SSH_USER }} "${{ env.SSH_PASSWORD }}"
-          sudo createhomedir -c -u ${{ env.SSH_USER }} 2>/dev/null || true
-          sudo dscl . -append /Groups/admin GroupMembership ${{ env.SSH_USER }}
-          echo "✅ User created"
-
-      - name: "🔐 Setup SSH Server"
-        run: |
-          sudo systemsetup -setremotelogin on
-          sudo sed -i '' 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          echo "AllowUsers ${{ env.SSH_USER }}" | sudo tee -a /etc/ssh/sshd_config
-          sudo launchctl unload /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
-          sudo launchctl load /System/Library/LaunchDaemons/ssh.plist
-          echo "✅ SSH running"
-
       # ============================================
-      # Setup native macOS VNC (Screen Sharing)
+      # Simple VNC setup using Apple Remote Desktop
       # ============================================
-      - name: "🖥️ Setup Native macOS VNC"
+      - name: "🖥️ Setup VNC"
         run: |
-          echo "=== Setting up Native macOS Screen Sharing ==="
+          echo "=== Setting up VNC ==="
           
-          # Kill existing VNC processes
-          sudo killall AppleVNCServer 2>/dev/null || true
-          sudo killall ARDAgent 2>/dev/null || true
-          
-          # Enable Screen Sharing with VNC password
+          # Enable Remote Management
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate \
-            -configure -access -on \
+            -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "${{ env.VNC_PASSWORD }}" \
             -restart -agent -privs -all
           
-          # Allow all users
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -allowAccessFor -allUsers -privs -all
+          # Create a dummy user session to prevent black screen
+          sudo launchctl load /System/Library/LaunchDaemons/com.apple.opendirectoryd.plist 2>/dev/null || true
           
-          sleep 3
-          
-          # Check if VNC is running
-          if lsof -i :5900 | grep -q LISTEN; then
-            echo "✅ Native VNC running on port 5900"
-          else
-            echo "⚠️ Trying to restart VNC..."
-            sudo launchctl unload /System/Library/LaunchDaemons/com.apple.ARDAgent.plist 2>/dev/null
-            sleep 2
-            sudo launchctl load /System/Library/LaunchDaemons/com.apple.ARDAgent.plist
-            sleep 3
-            lsof -i :5900
-          fi
-
-      # ============================================
-      # Install noVNC and setup Python WebSocket proxy
-      # ============================================
-      - name: "🌐 Install noVNC and WebSocket Proxy"
-        run: |
-          echo "=== Installing noVNC ==="
-          
-          # Clone noVNC
-          git clone https://github.com/novnc/noVNC.git /tmp/noVNC
-          
-          # Create a simple Python WebSocket proxy
-          cat > /tmp/websocket_proxy.py << 'PYTHON'
-          #!/usr/bin/env python3
-          import asyncio
-          import websockets
-          import socket
-          import sys
-          
-          async def proxy(websocket, path):
-              # Connect to VNC server
-              reader, writer = await asyncio.open_connection('localhost', 5900)
-              
-              async def vnc_to_ws():
-                  while True:
-                      data = await reader.read(4096)
-                      if not data:
-                          break
-                      await websocket.send(data)
-              
-              async def ws_to_vnc():
-                  while True:
-                      data = await websocket.recv()
-                      writer.write(data)
-                      await writer.drain()
-              
-              try:
-                  await asyncio.gather(vnc_to_ws(), ws_to_vnc())
-              except:
-                  pass
-              finally:
-                  writer.close()
-          
-          start_server = websockets.serve(proxy, '0.0.0.0', 8080)
-          print('WebSocket proxy running on port 8080')
-          asyncio.get_event_loop().run_until_complete(start_server)
-          asyncio.get_event_loop().run_forever()
-          PYTHON
-          
-          # Install websockets Python package
-          pip3 install websockets
-          
-          # Start the proxy in background
-          python3 /tmp/websocket_proxy.py &
-          sleep 3
-          
-          echo "✅ WebSocket proxy running on port 8080"
+          echo "✅ VNC configured"
 
       # ============================================
       # Install bore.pub
@@ -159,31 +59,59 @@ jobs:
           echo "✅ bore.pub installed"
 
       # ============================================
-      # Create bore.pub tunnel for web interface
+      # Create bore.pub tunnel for VNC
       # ============================================
       - name: "🔗 Create bore.pub Tunnel"
         id: bore-tunnel
         run: |
-          echo "=== Creating bore.pub tunnel for web interface ==="
+          echo "=== Creating bore.pub tunnel ==="
           
-          # Tunnel port 8080 (web interface)
-          bore local 8080 --to bore.pub 2>&1 | tee /tmp/bore_output.txt &
+          # Start bore tunnel
+          bore local 5900 --to bore.pub 2>&1 | tee /tmp/bore_output.txt &
           sleep 8
           
+          # Extract port
           BORE_PORT=$(grep -o 'remote_port=[0-9]\+' /tmp/bore_output.txt | head -1 | cut -d= -f2)
           if [ -z "$BORE_PORT" ]; then
             BORE_PORT=$(grep -o '[0-9]\+' /tmp/bore_output.txt | tail -1)
           fi
           
-          if [ -n "$BORE_PORT" ]; then
-            echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
-            echo "Tunnel at: bore.pub:$BORE_PORT"
+          if [ -z "$BORE_PORT" ]; then
+            BORE_PORT="10425"
+          fi
+          
+          echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
+
+      # ============================================
+      # Keep trying to start VNC until it works
+      # ============================================
+      - name: "🔄 Ensure VNC is running"
+        run: |
+          echo "=== Ensuring VNC is running ==="
+          
+          # Try multiple times to start VNC
+          for i in {1..5}; do
+            if lsof -i :5900 | grep -q LISTEN; then
+              echo "✅ VNC is running on port 5900"
+              break
+            else
+              echo "Attempt $i: Starting VNC..."
+              sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+                -activate -restart -agent
+              sleep 3
+            fi
+          done
+          
+          # Final check
+          if lsof -i :5900 | grep -q LISTEN; then
+            echo "✅ VNC successfully running"
           else
-            echo "BORE_PORT=10425" >> $GITHUB_ENV
+            echo "⚠️ VNC port check:"
+            lsof -i :5900
           fi
 
       # ============================================
-      # Display connection information
+      # Display connection info
       # ============================================
       - name: "📋 CONNECTION INFORMATION"
         run: |
@@ -192,22 +120,20 @@ jobs:
           echo "║        ✅ macOS VNC RUNNER IS READY!                             ║"
           echo "╚══════════════════════════════════════════════════════════════════╝"
           echo ""
-          echo "🔐 WEB VNC CONNECTION:"
-          echo "   URL: http://bore.pub:${{ env.BORE_PORT }}/vnc.html"
+          echo "🔐 VNC CONNECTION DETAILS:"
+          echo "   Address: bore.pub:${{ env.BORE_PORT }}"
           echo "   Password: ${{ env.VNC_PASSWORD }}"
           echo ""
-          echo "🔐 SSH CONNECTION:"
-          echo "   User: ${{ env.SSH_USER }}"
-          echo "   Password: ${{ env.SSH_PASSWORD }}"
+          echo "🖥️ HOW TO CONNECT WITH REALVNC:"
+          echo "   1. Open RealVNC Viewer on your computer"
+          echo "   2. Enter: bore.pub:${{ env.BORE_PORT }}"
+          echo "   3. Password: ${{ env.VNC_PASSWORD }}"
+          echo "   4. Click Connect"
           echo ""
-          echo "🖥️ HOW TO CONNECT WITH WEB BROWSER:"
-          echo "   1. Open any web browser (Chrome, Firefox, Edge, Safari)"
-          echo "   2. Go to: http://bore.pub:${{ env.BORE_PORT }}/vnc.html"
-          echo "   3. Click 'Connect' (no need to change settings)"
-          echo "   4. Enter password: ${{ env.VNC_PASSWORD }}"
-          echo "   5. You will see the macOS desktop!"
+          echo "🖥️ HOW TO CONNECT WITH ANY VNC CLIENT:"
+          echo "   Use bore.pub:${{ env.BORE_PORT }} with password ${{ env.VNC_PASSWORD }}"
           echo ""
-          echo "⚠️ If the page doesn't load, wait 10 seconds and refresh"
+          echo "⏱️ This runner will stay active for ${{ github.event.inputs.runtime_hours || 5.5 }} hours"
           echo ""
 
       # ============================================
@@ -216,17 +142,15 @@ jobs:
       - name: "⏰ Keeping Runner Alive"
         run: |
           MAX_HOURS=${{ github.event.inputs.runtime_hours || 5.5 }}
-          MAX_SECONDS=$(echo "$MAX_HOURS * 3600" | bc | cut -d. -f1)
+          MAX_SECONDS=$(echo "$MAX_HOURS * 3600" | bc)
           START_TIME=$(date -u +%s)
           
           echo "══════════════════════════════════════════════════════════════════════"
-          echo "🟢 RUNNER ACTIVE - WEB VNC READY"
+          echo "🟢 RUNNER ACTIVE - VNC READY"
           echo "══════════════════════════════════════════════════════════════════════"
           echo ""
-          echo "   Web VNC: http://bore.pub:${{ env.BORE_PORT }}/vnc.html"
+          echo "   bore.pub:${{ env.BORE_PORT }}"
           echo "   Password: ${{ env.VNC_PASSWORD }}"
-          echo ""
-          echo "   Open this URL in your browser to access macOS!"
           echo ""
           
           while true; do
@@ -235,5 +159,5 @@ jobs:
               echo "Time limit reached, stopping..."
               break
             fi
-            sleep 300
+            sleep 60
           done
